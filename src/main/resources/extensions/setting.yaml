@@ -21,6 +21,16 @@ spec:
           value: 60
           min: 20
           max: 600
+        - $formkit: text
+          name: siteHomepage
+          label: 本站域名
+          help: 填写你的博客域名，例如 blog.fufu520.cn。用于在「来源站点」里排除自己站内的跳转。
+          value: ""
+        - $formkit: number
+          name: officialViewsAdjustment
+          label: 官方总浏览量修正值
+          help: 加到 Halo 官方总浏览量上的数字。比如换过博客或迁移过数据，官方计数从 0 开始，把旧站的历史浏览量填在这里即可对上总数。留空或填 0 表示不修正。
+          value: 0
         - $formkit: checkbox
           name: showIpInConsole
           label: 后台显示访客 IP 地址
@@ -29,23 +39,18 @@ spec:
         - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口
-          help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在访客详情里点击「查询属地」时才会请求。
+          help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在点击「查询属地」时才请求。
           value: "https://api.mir6.com/api/ip?ip=%s&type=json"
-        - $formkit: text
-          name: siteLaunchDate
-          label: 博客上线日期
-          help: 格式 yyyy-MM-dd，例如 2024-06-01。访问趋势图从这一天开始画；插件只能统计启用之后的访问，更早的日期会显示为 0。
-          value: ""
         - $formkit: number
           name: historyRetentionDays
-          label: 历史记录保留天数
-          help: 超过该天数的访客记录会被自动清理。
+          label: 访客记录保留天数
+          help: 超过该天数的访客明细会被自动清理，文章与每日统计不会删除。
           value: 90
           min: 1
           max: 3650
         - $formkit: number
           name: maxRecords
-          label: 历史记录最大条数
+          label: 访客记录最大条数
           help: 超过上限时优先删除最久未活跃的记录。
           value: 5000
           min: 100

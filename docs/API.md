@@ -230,7 +230,7 @@
 
 - `views` / `visitors`：插件统计的文章浏览量与去重访客
 - `officialViews`：Halo 官方计数器（`counters.visit`）的总和
-- `onlineSince`：设置里的博客上线日期，未配置时取最早有记录的一天
+- `officialViews`：Halo 官方计数器（`counters.visit`）的总和，加上设置里的「官方总浏览量修正值」
 
 ### 访问趋势
 
@@ -248,7 +248,7 @@
 }
 ```
 
-`series` 是从上线日期（或 `days` 窗口起点）到今天、补齐空缺日期的连续序列，可直接用于画曲线图。
+`series` 是最近 `days` 天、补齐空缺日期的连续序列，可直接用于画曲线图。
 
 ### 文章列表
 

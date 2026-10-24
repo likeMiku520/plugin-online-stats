@@ -9,23 +9,22 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   String geoEndpoint,
                                   Integer historyRetentionDays,
                                   Integer maxRecords,
-                                  String siteLaunchDate) {
+                                  Long officialViewsAdjustment,
+                                  String siteHomepage) {
 
     public static final String GROUP = "basic";
 
     /**
-     * Blog launch date (yyyy-MM-dd). Trend charts start here; the plugin can only count
-     * visits that happen after it was enabled, earlier days simply show as zero.
+     * Manual correction added to the official view total. Useful when the blog was
+     * migrated and Halo's own counters start from zero; usually left empty.
      */
-    public String siteLaunchDateOrDefault() {
-        if (siteLaunchDate == null || siteLaunchDate.isBlank()) {
-            return null;
-        }
-        try {
-            return java.time.LocalDate.parse(siteLaunchDate.trim()).toString();
-        } catch (Exception e) {
-            return null;
-        }
+    public long officialViewsAdjustmentOrDefault() {
+        return officialViewsAdjustment == null ? 0L : officialViewsAdjustment;
+    }
+
+    /** The blog's own domain, used to filter self referrals out of the source list. */
+    public String siteHomepageOrDefault() {
+        return siteHomepage == null ? "" : siteHomepage.trim();
     }
 
     public int heartbeatIntervalOrDefault() {

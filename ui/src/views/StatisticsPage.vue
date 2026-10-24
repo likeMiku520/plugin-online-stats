@@ -9,12 +9,10 @@ interface Overview {
   uniqueVisitors: number
   officialViews: number
   officialViewsOnTracked: number
-  totalOnlineMs: number
   todayViews: number
   todayVisitors: number
   online: number
   articles: number
-  onlineSince: string | null
   loaded: boolean
   posts: number
   unresolvedHeartbeats: number
@@ -46,12 +44,11 @@ const api = '/apis/online-stats.halo.run/v1alpha1'
 
 const overview = ref<Overview | null>(null)
 const series = ref<Point[]>([])
-const trendLoaded = ref(false)
 const articles = ref<ArticleRow[]>([])
 const browsers = ref<SourceItem[]>([])
 const systems = ref<SourceItem[]>([])
 const referers = ref<SourceItem[]>([])
-const trendDays = ref(30)
+const trendDays = ref(90)
 const articleSort = ref<'views' | 'visitors' | 'today' | 'duration'>('views')
 const loading = ref(true)
 
@@ -61,10 +58,27 @@ const drill = ref<{
   subtitle: string
   loading: boolean
   kind: 'article' | 'source' | 'visitor' | ''
-  rows: { label: string; value: string; extra?: string }[]
-} >({ open: false, title: '', subtitle: '', loading: false, kind: '', rows: [] })
+  rows: { label: string; value: string; extra?: string; ip?: string | null }[]
+}>({ open: false, title: '', subtitle: '', loading: false, kind: '', rows: [] })
 
+const geoBusy = ref('')
+const geoCache = ref<Record<string, string>>({})
 let timer: number | undefined
+
+async function lookupGeo(ip: string | null | undefined) {
+  if (!ip || geoBusy.value) {
+    return
+  }
+  geoBusy.value = ip
+  try {
+    const { data } = await axios.get(`${api}/location`, { params: { ip } })
+    geoCache.value[ip] = data.resolved ? data.location || '未知' : data.error || '查询失败'
+  } catch (e) {
+    geoCache.value[ip] = '查询失败'
+  } finally {
+    geoBusy.value = ''
+  }
+}
 
 async function loadAll() {
   loading.value = true
@@ -79,7 +93,6 @@ async function loadAll() {
     ])
     overview.value = ov.data
     series.value = tr.data.series || []
-    trendLoaded.value = true
     articles.value = ar.data.items || []
     browsers.value = br.data.items || []
     systems.value = sy.data.items || []
@@ -133,8 +146,9 @@ async function openArticle(postName: string, title: string | null) {
     const rows = (data.visitors || []).map(
       (v: { visitorKey: string; views: number; durationMs: number; lastSeenAt: number | null; ip: string | null }) => ({
         label: v.ip || v.visitorKey,
-        value: `${v.views} 次`,
-        extra: `停留 ${fmtDuration(v.durationMs)} · ${fmtTime(v.lastSeenAt)}`,
+        value: `看了 ${v.views} 次`,
+        extra: `停留 ${fmtDuration(v.durationMs)} · 最后 ${fmtTime(v.lastSeenAt)}`,
+        ip: v.ip,
       }),
     )
     const a = data.article
@@ -143,7 +157,7 @@ async function openArticle(postName: string, title: string | null) {
       title: title || '文章详情',
       subtitle: `本插件统计 ${a.views} 次浏览 · ${a.visitors} 位访客 · 平均停留 ${fmtDuration(
         a.avgOnlineMs,
-      )} · Halo 官方计数 ${a.officialViews}`,
+      )} · Halo 官方记录 ${a.officialViews} 次`,
       loading: false,
       kind: 'article',
       rows,
@@ -170,14 +184,15 @@ async function openSource(dimension: string, value: string) {
     const rows = (data.items || []).map(
       (v: { visitorKey: string; views: number; ip: string | null }) => ({
         label: v.ip || v.visitorKey,
-        value: `${v.views} 次`,
-        extra: v.ip ? v.visitorKey : undefined,
+        value: `浏览 ${v.views} 次`,
+        extra: v.ip ? undefined : v.visitorKey,
+        ip: v.ip,
       }),
     )
     drill.value = {
       open: true,
       title: value,
-      subtitle: `近 30 天 ${data.views} 次浏览 · ${data.visitors} 位访客`,
+      subtitle: `近 30 天共 ${data.views} 次浏览 · ${data.visitors} 位访客`,
       loading: false,
       kind: 'source',
       rows,
@@ -252,12 +267,7 @@ onUnmounted(() => {
     <header class="os-stat-page__head">
       <div>
         <h2>访问统计</h2>
-        <p>
-          数据来自插件自己的访问记录，浏览量同时对照 Halo 官方计数。
-          <template v-if="overview?.onlineSince">
-            统计起点：{{ overview.onlineSince }}。
-          </template>
-        </p>
+        <p>数据来自插件自己的访问记录，浏览量同时对照 Halo 官方计数。统计只记录文章详情页。</p>
       </div>
       <button class="os-btn os-btn--ghost" type="button" @click="loadAll">刷新</button>
     </header>
@@ -292,11 +302,6 @@ onUnmounted(() => {
         <span class="os-card__value">{{ overview.articles }}</span>
         <span class="os-card__hint">被访问过的文章</span>
       </div>
-      <div class="os-card">
-        <span class="os-card__label">累计阅读时长</span>
-        <span class="os-card__value os-card__value--sm">{{ fmtDuration(overview.totalOnlineMs) }}</span>
-        <span class="os-card__hint">按心跳间隔累计</span>
-      </div>
     </div>
 
     <section class="os-panel">
@@ -305,9 +310,9 @@ onUnmounted(() => {
         <div class="os-seg">
           <button
             v-for="option in [
-              { value: 7, label: '近 7 天' },
-              { value: 30, label: '近 30 天' },
               { value: 90, label: '近 90 天' },
+              { value: 30, label: '近 30 天' },
+              { value: 7, label: '近 7 天' },
             ]"
             :key="option.value"
             type="button"
@@ -384,12 +389,12 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th>文章</th>
-            <th class="os-right">浏览量</th>
-            <th class="os-right">官方</th>
-            <th class="os-right">访客</th>
-            <th class="os-right">今日</th>
+            <th class="os-right">插件浏览</th>
+            <th class="os-right">官方浏览</th>
+            <th class="os-right">访客数</th>
+            <th class="os-right">今日浏览</th>
             <th class="os-right">平均停留</th>
-            <th class="os-right">操作</th>
+            <th class="os-right">明细</th>
           </tr>
         </thead>
         <tbody>
@@ -432,6 +437,18 @@ onUnmounted(() => {
               <span class="os-detail__label">{{ row.label }}</span>
               <span class="os-detail__value">{{ row.value }}</span>
               <span v-if="row.extra" class="os-detail__extra">{{ row.extra }}</span>
+              <span v-if="row.ip" class="os-detail__geo">
+                <button
+                  v-if="!geoCache[row.ip]"
+                  class="os-loc-btn"
+                  type="button"
+                  :disabled="geoBusy === row.ip"
+                  @click="lookupGeo(row.ip)"
+                >
+                  {{ geoBusy === row.ip ? '查询中…' : '查属地' }}
+                </button>
+                <span v-else class="os-detail__loc">{{ geoCache[row.ip] }}</span>
+              </span>
             </li>
           </ul>
           <div v-else class="os-empty">没有更细的数据</div>
@@ -788,8 +805,9 @@ onUnmounted(() => {
 
   li {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     gap: 0.25rem 0.5rem;
+    align-items: baseline;
     padding: 0.5rem 0;
     font-size: 0.8125rem;
     border-bottom: 1px solid #f8fafc;
@@ -798,17 +816,101 @@ onUnmounted(() => {
   &__label {
     color: #0f172a;
     font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
   }
 
   &__value {
     color: #1b9c93;
     font-weight: 600;
+    white-space: nowrap;
   }
 
   &__extra {
     grid-column: 1 / -1;
     font-size: 0.6875rem;
     color: #94a3b8;
+  }
+
+  &__geo {
+    grid-column: 1 / -1;
+  }
+
+  &__loc {
+    font-size: 0.6875rem;
+    color: #1b9c93;
+  }
+}
+
+.os-loc-btn {
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: #1b9c93;
+  cursor: pointer;
+  background: #e8f9f7;
+  border: 1px solid #b9e7e3;
+  border-radius: 0.25rem;
+
+  &:disabled {
+    color: #9ca3af;
+    cursor: wait;
+    background: #f3f4f6;
+    border-color: #e5e7eb;
+  }
+}
+
+/* Narrow screens: cards and panels stack, the table scrolls sideways instead of
+   squashing its columns. */
+@media (max-width: 768px) {
+  .os-stat-page {
+    padding: 0.75rem 0.75rem 2rem;
+
+    &__head {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+  }
+
+  .os-cards {
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+    gap: 0.5rem;
+  }
+
+  .os-card__value {
+    font-size: 1.25rem;
+  }
+
+  .os-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .os-panel {
+    padding: 0.75rem 0.75rem 1rem;
+    overflow-x: auto;
+
+    &__head {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+  }
+
+  .os-table {
+    min-width: 34rem;
+
+    th,
+    td {
+      padding: 0.375rem 0.5rem;
+      font-size: 0.75rem;
+    }
+  }
+
+  .os-bars li {
+    grid-template-columns: 5.5rem 1fr 2.5rem;
+    gap: 0.375rem;
+  }
+
+  .os-drawer {
+    width: 100%;
   }
 }
 </style>

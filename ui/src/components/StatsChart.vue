@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 export interface Point {
   date: string
@@ -8,30 +8,34 @@ export interface Point {
   cumulative?: number
 }
 
-const props = defineProps<{
-  series: Point[]
-  metric?: 'views' | 'visitors' | 'cumulative'
-  height?: number
-}>()
+const props = withDefaults(
+  defineProps<{
+    series: Point[]
+    metric?: 'views' | 'visitors' | 'cumulative'
+    height?: number
+    showBars?: boolean
+  }>(),
+  { metric: 'views', height: 240, showBars: true },
+)
 
 const hovered = ref<number | null>(null)
+const svgRef = ref<SVGSVGElement | null>(null)
 
-const metric = computed(() => props.metric || 'views')
-const height = computed(() => props.height || 220)
-
+const metric = computed(() => props.metric)
 const values = computed(() => props.series.map((p) => Number(p[metric.value] ?? 0)))
 const maxValue = computed(() => Math.max(1, ...values.value))
 const hasData = computed(() => props.series.length > 0 && values.value.some((v) => v > 0))
 
-const width = 800
-const padLeft = 44
-const padRight = 16
-const padTop = 16
-const padBottom = 28
+/* The viewBox tracks the rendered pixel size so nothing is stretched; the SVG scales
+   1:1 and only the drawing coordinates change. */
+const width = ref(880)
+const padLeft = 46
+const padRight = 14
+const padTop = 14
+const padBottom = 30
 
-const innerWidth = computed(() => width - padLeft - padRight)
-const innerHeight = computed(() => height.value - padTop - padBottom)
-
+const innerWidth = computed(() => Math.max(10, width.value - padLeft - padRight))
+const innerHeight = computed(() => Math.max(10, props.height - padTop - padBottom))
 const step = computed(() =>
   props.series.length <= 1 ? innerWidth.value : innerWidth.value / (props.series.length - 1),
 )
@@ -57,13 +61,12 @@ const areaPath = computed(() => {
   if (!props.series.length) {
     return ''
   }
-  const first = `${padLeft},${(padTop + innerHeight.value).toFixed(1)}`
-  const last = `${x(props.series.length - 1).toFixed(1)},${(padTop + innerHeight.value).toFixed(1)}`
-  return `${linePath.value} L${last} L${first} Z`
+  const baseline = (padTop + innerHeight.value).toFixed(1)
+  return `${linePath.value} L${x(props.series.length - 1).toFixed(1)},${baseline} L${padLeft},${baseline} Z`
 })
 
 const barWidth = computed(() =>
-  Math.max(2, Math.min(28, innerWidth.value / Math.max(props.series.length, 1) - 2)),
+  Math.max(2, Math.min(18, innerWidth.value / Math.max(props.series.length, 1) - 3)),
 )
 
 const ticks = computed(() => {
@@ -101,34 +104,66 @@ function shortDate(date: string): string {
   return date.length >= 10 ? date.slice(5) : date
 }
 
+function measure() {
+  const node = svgRef.value
+  if (node) {
+    const rect = node.getBoundingClientRect()
+    if (rect.width > 0) {
+      width.value = rect.width
+    }
+  }
+}
+
 function onMove(event: MouseEvent) {
-  const target = event.currentTarget as SVGSVGElement
-  const rect = target.getBoundingClientRect()
+  measure()
+  const node = svgRef.value
+  if (!node) {
+    return
+  }
+  const rect = node.getBoundingClientRect()
   const ratio = (event.clientX - rect.left) / rect.width
-  const index = Math.round((ratio * width - padLeft) / step.value)
+  const index = Math.round((ratio * width.value - padLeft) / step.value)
   hovered.value = Math.max(0, Math.min(props.series.length - 1, index))
 }
+
+let observer: ResizeObserver | undefined
+
+onMounted(() => {
+  measure()
+  if (typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(() => measure())
+    if (svgRef.value) {
+      observer.observe(svgRef.value)
+    }
+  }
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+})
 </script>
 
 <template>
   <div class="os-chart">
     <div v-if="hoveredPoint" class="os-chart__tip">
       <strong>{{ hoveredPoint.date }}</strong>
-      <span>浏览量 {{ hoveredPoint.views }}</span>
+      <span>浏览 {{ hoveredPoint.views }}</span>
       <span>访客 {{ hoveredPoint.visitors }}</span>
       <span v-if="hoveredPoint.cumulative !== undefined">累计 {{ hoveredPoint.cumulative }}</span>
     </div>
+
     <svg
-      :viewBox="`0 0 ${width} ${height}`"
+      ref="svgRef"
       class="os-chart__svg"
-      preserveAspectRatio="none"
+      :viewBox="`0 0 ${width} ${height}`"
+      :style="{ height: `${height}px` }"
       @mousemove="onMove"
       @mouseleave="hovered = null"
     >
       <defs>
-        <linearGradient id="osArea" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="#39C5BB" stop-opacity="0.35" />
-          <stop offset="100%" stop-color="#39C5BB" stop-opacity="0.02" />
+        <linearGradient id="osAreaFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#39C5BB" stop-opacity="0.28" />
+          <stop offset="100%" stop-color="#39C5BB" stop-opacity="0" />
         </linearGradient>
       </defs>
 
@@ -150,7 +185,7 @@ function onMove(event: MouseEvent) {
       </g>
 
       <template v-if="hasData">
-        <g class="os-chart__bars">
+        <g v-if="showBars" class="os-chart__bars">
           <rect
             v-for="(value, index) in values"
             :key="`b${index}`"
@@ -158,30 +193,33 @@ function onMove(event: MouseEvent) {
             :y="y(value)"
             :width="barWidth"
             :height="Math.max(0, padTop + innerHeight - y(value))"
-            rx="2"
+            rx="3"
           />
         </g>
         <path class="os-chart__area" :d="areaPath" />
         <path class="os-chart__line" :d="linePath" />
+        <line
+          v-if="hovered !== null"
+          class="os-chart__cursor"
+          :x1="x(hovered)"
+          :x2="x(hovered)"
+          :y1="padTop"
+          :y2="padTop + innerHeight"
+        />
         <circle
           v-if="hovered !== null"
           class="os-chart__dot"
           :cx="x(hovered)"
           :cy="y(values[hovered] ?? 0)"
-          r="4"
+          r="4.5"
         />
       </template>
       <text v-else class="os-chart__empty" :x="width / 2" :y="height / 2">
-        这段时间还没有访问数据
+        最近这段时间还没有访问数据
       </text>
 
       <g class="os-chart__axis os-chart__axis--x">
-        <text
-          v-for="index in labelIndexes"
-          :key="`x${index}`"
-          :x="x(index)"
-          :y="height - 8"
-        >
+        <text v-for="index in labelIndexes" :key="`x${index}`" :x="x(index)" :y="height - 8">
           {{ shortDate(series[index]?.date || '') }}
         </text>
       </g>
@@ -192,12 +230,11 @@ function onMove(event: MouseEvent) {
 <style lang="scss" scoped>
 .os-chart {
   position: relative;
+  width: 100%;
 
   &__svg {
     display: block;
     width: 100%;
-    height: 220px;
-    overflow: visible;
   }
 
   &__grid line {
@@ -208,10 +245,7 @@ function onMove(event: MouseEvent) {
   &__axis text {
     font-size: 10px;
     fill: #9ca3af;
-
-    &:first-child {
-      text-anchor: end;
-    }
+    text-anchor: end;
   }
 
   &__axis--x text {
@@ -219,11 +253,11 @@ function onMove(event: MouseEvent) {
   }
 
   &__bars rect {
-    fill: #b9e7e3;
+    fill: #d8f4f1;
   }
 
   &__area {
-    fill: url(#osArea);
+    fill: url(#osAreaFill);
   }
 
   &__line {
@@ -232,6 +266,12 @@ function onMove(event: MouseEvent) {
     stroke-width: 2;
     stroke-linejoin: round;
     stroke-linecap: round;
+  }
+
+  &__cursor {
+    stroke: #b9e7e3;
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
   }
 
   &__dot {
@@ -250,8 +290,10 @@ function onMove(event: MouseEvent) {
     position: absolute;
     top: 0;
     left: 0.5rem;
+    z-index: 2;
     display: flex;
-    gap: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
     padding: 0.25rem 0.5rem;
     font-size: 0.6875rem;
     color: #334155;

@@ -554,10 +554,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             int days = positiveInt(request.queryParam("days").orElse(null), 30);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("days", days);
-            payload.put("launchDate", settings.siteLaunchDateOrDefault());
             payload.put("series", queryService.cumulativeTrend(settings, days));
-            payload.put("daily30", queryService.trend(settings, 30));
-            payload.put("daily7", queryService.trend(settings, 7));
+            payload.put("daily", queryService.trend(settings, days));
             return ServerResponse.ok().bodyValue(payload);
         });
     }
@@ -628,7 +626,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
 
     private Mono<OnlineStatsSettings> fetchSettings() {
         return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null));
+            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null, null));
     }
 
     private String resolveClientIp(ServerRequest request) {

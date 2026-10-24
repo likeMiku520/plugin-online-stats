@@ -48,8 +48,9 @@ public class StatisticsQueryService {
             todayVisitors += nvl(spec.getTodayVisitors());
         }
         // Articles that were never visited by this plugin still have official counts, so the
-        // aggregation service reports the full official total separately.
-        long officialTotal = stats.officialViewsTotal();
+        // aggregation service reports the full official total separately. The adjustment
+        // lets a migrated blog add its historical total back in.
+        long officialTotal = stats.officialViewsTotal() + settings.officialViewsAdjustmentOrDefault();
 
         long totalVisitors = uniqueVisitors(days);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -65,42 +66,20 @@ public class StatisticsQueryService {
         result.put("articles", articles.size());
         result.put("days", days.size());
         result.put("today", today);
-        result.put("onlineSince", onlineSince(settings, days));
         result.put("loaded", stats.isLoaded());
         result.putAll(stats.diagnostics());
         return result;
     }
 
-    private String onlineSince(OnlineStatsSettings settings, List<DailyStat> days) {
-        String configured = settings.siteLaunchDateOrDefault();
-        if (configured != null && !configured.isBlank()) {
-            return configured;
-        }
-        return earliestDay(days);
-    }
-
     /** Daily series for the trend chart, oldest first, gaps filled with zero. */
     public List<Map<String, Object>> trend(OnlineStatsSettings settings, int days) {
-        String today = LocalDate.now(ZoneId.systemDefault()).format(DAY);
-        String start = settings.siteLaunchDateOrDefault();
-        LocalDate todayDate = LocalDate.parse(today, DAY);
+        LocalDate todayDate = LocalDate.now(ZoneId.systemDefault());
         LocalDate from = todayDate.minusDays(Math.max(days, 1) - 1L);
-        if (start != null && !start.isBlank()) {
-            try {
-                LocalDate configured = LocalDate.parse(start, DAY);
-                if (configured.isAfter(from)) {
-                    from = configured;
-                }
-            } catch (Exception ignored) {
-                // an invalid date simply keeps the default window
-            }
-        }
         Map<String, DailyStat> byDate = new LinkedHashMap<>();
         for (DailyStat day : stats.daily()) {
             byDate.put(day.getSpec().getDate(), day);
         }
         List<Map<String, Object>> series = new ArrayList<>();
-        long cursor = 0;
         LocalDate current = from;
         while (!current.isAfter(todayDate)) {
             String key = current.format(DAY);
@@ -112,7 +91,6 @@ public class StatisticsQueryService {
             point.put("views", views);
             point.put("visitors", visitors);
             series.add(point);
-            cursor += views;
             current = current.plusDays(1);
         }
         return series;
@@ -145,6 +123,9 @@ public class StatisticsQueryService {
                 default -> day.getSpec().getBrowsers();
             };
             map.forEach((key, value) -> {
+                if ("referer".equals(dimension) && isSelfReferer(key, settings)) {
+                    return;
+                }
                 views.merge(key, value, Long::sum);
                 List<String> keys = visitors.computeIfAbsent(key, k -> new ArrayList<>());
                 List<String> tracked = day.getSpec().getSourceVisitors()
@@ -341,6 +322,34 @@ public class StatisticsQueryService {
         return dimension + "|" + value;
     }
 
+    /**
+     * Internal navigation (clicking a post from the home page) is not a real referrer,
+     * so it is hidden from the source list when the domain is known.
+     */
+    private static boolean isSelfReferer(String value, OnlineStatsSettings settings) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String configured = settings.siteHomepageOrDefault();
+        if (configured.isBlank()) {
+            return false;
+        }
+        String host = configured;
+        try {
+            if (host.contains("://")) {
+                host = java.net.URI.create(host).getHost();
+            }
+        } catch (Exception ignored) {
+            // fall back to comparing the raw setting
+        }
+        if (host == null || host.isBlank()) {
+            return false;
+        }
+        String normalized = host.startsWith("www.") ? host.substring(4) : host;
+        String target = value.startsWith("www.") ? value.substring(4) : value;
+        return target.equalsIgnoreCase(normalized);
+    }
+
     private List<DailyStat> window(int days, String from, String to) {
         LocalDate today = LocalDate.now(ZoneId.systemDefault());
         LocalDate start = today.minusDays(Math.max(days, 1) - 1L);
@@ -376,14 +385,6 @@ public class StatisticsQueryService {
             keys.addAll(day.getSpec().getVisitorViews().keySet());
         }
         return keys.size();
-    }
-
-    private String earliestDay(List<DailyStat> days) {
-        return days.stream()
-            .map(day -> day.getSpec().getDate())
-            .filter(date -> date != null && !date.isBlank())
-            .min(String::compareTo)
-            .orElse(null);
     }
 
     private static List<Map<String, Object>> topEntries(Map<String, Long> map, int limit) {

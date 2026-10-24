@@ -666,6 +666,15 @@ onUnmounted(() => {
                 <button v-if="detail.ip" class="os-copy" type="button" @click="copy(detail.ip, 'ip')">
                   {{ copied === 'ip' ? '已复制' : '复制' }}
                 </button>
+                <button
+                  v-if="detail.ip && !detail.geoResolvedAt"
+                  class="os-copy"
+                  type="button"
+                  :disabled="geoLoading"
+                  @click="lookupLocation()"
+                >
+                  {{ geoLoading ? '查询中…' : '查属地' }}
+                </button>
               </dd>
             </dl>
           </section>
@@ -1353,5 +1362,51 @@ onUnmounted(() => {
   font-size: 0.6875rem;
   color: #9ca3af;
   word-break: break-all;
+}
+
+/* Narrow screens: stack the toolbar, let the table scroll instead of squashing. */
+@media (max-width: 768px) {
+  .os-page {
+    padding: 0.75rem 0.75rem 2rem;
+
+    &__stats {
+      grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+      gap: 0.5rem;
+    }
+
+    &__card {
+      overflow-x: auto;
+    }
+  }
+
+  .os-stat__value {
+    font-size: 1.25rem;
+  }
+
+  .os-toolbar__row {
+    gap: 0.375rem;
+  }
+
+  .os-toolbar__search {
+    flex: 1 1 100%;
+  }
+
+  .os-toolbar__sort {
+    margin-left: 0;
+  }
+
+  .os-table {
+    min-width: 34rem;
+
+    th,
+    td {
+      padding: 0.375rem 0.5rem;
+      font-size: 0.75rem;
+    }
+  }
+
+  .os-drawer {
+    width: 100%;
+  }
 }
 </style>
