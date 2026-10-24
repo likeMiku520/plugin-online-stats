@@ -213,16 +213,33 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
 
             long onlineCutoff = System.currentTimeMillis() - timeout;
             List<VisitorRecord> all = recordService.list();
-            List<RecordView> views = new ArrayList<>();
+            List<OnlineVisitor> live = registry.list(timeout);
+            Map<String, OnlineVisitor> liveByKey = new LinkedHashMap<>();
+            for (OnlineVisitor visitor : live) {
+                liveByKey.put(visitor.getKey(), visitor);
+            }
+
+            // Records are written every 20 seconds; merging the in-memory visitors in
+            // means a brand new visitor shows up in the table immediately.
+            Map<String, RecordView> merged = new LinkedHashMap<>();
             for (VisitorRecord record : all) {
-                boolean online = isOnline(record, onlineCutoff);
-                if ("online".equals(status) && !online) {
+                String name = record.getMetadata().getName();
+                merged.put(name, toRecordView(record, liveByKey.get(name), onlineCutoff, showIp));
+            }
+            for (OnlineVisitor visitor : live) {
+                if (!merged.containsKey(visitor.getKey())) {
+                    merged.put(visitor.getKey(), toRecordView(visitor, showIp));
+                }
+            }
+
+            List<RecordView> views = new ArrayList<>();
+            for (RecordView view : merged.values()) {
+                if ("online".equals(status) && !view.online()) {
                     continue;
                 }
-                if ("offline".equals(status) && online) {
+                if ("offline".equals(status) && view.online()) {
                     continue;
                 }
-                RecordView view = toRecordView(record, online, showIp);
                 if ("human".equals(type) && view.bot()) {
                     continue;
                 }
@@ -254,13 +271,13 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             stats.put("total", total);
             stats.put("todayNew", countToday(all));
             int bots = 0;
-            for (VisitorRecord record : all) {
-                if (isBotRecord(record.getSpec())) {
+            for (RecordView view : merged.values()) {
+                if (view.bot()) {
                     bots++;
                 }
             }
             stats.put("bots", bots);
-            stats.put("humans", all.size() - bots);
+            stats.put("humans", merged.size() - bots);
             stats.putAll(recordService.diagnostics());
 
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -280,10 +297,10 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             if (record == null) {
                 return ServerResponse.notFound().build();
             }
-            boolean online = isOnline(record,
-                System.currentTimeMillis() - settings.onlineTimeoutMillis());
             return ServerResponse.ok()
-                .bodyValue(toRecordView(record, online, settings.showIpInConsoleOrDefault()));
+                .bodyValue(toRecordView(record, null,
+                    System.currentTimeMillis() - settings.onlineTimeoutMillis(),
+                    settings.showIpInConsoleOrDefault()));
         });
     }
 
@@ -310,6 +327,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             final String targetIp = ip;
             return ipGeoService.lookup(targetIp).flatMap(location -> {
                 if (!recordName.isBlank() && location.resolved()) {
+                    if (recordService.get(recordName) == null) {
+                        recordService.flushVisitor(recordName);
+                    }
                     recordService.applyLocation(recordName, location);
                 }
                 return ServerResponse.ok()
@@ -405,9 +425,27 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         }
     }
 
-    private RecordView toRecordView(VisitorRecord record, boolean online, boolean showIp) {
+    /**
+     * Builds a console row. When a live visitor is supplied the realtime fields come
+     * from memory, so a visit is visible before the first database flush.
+     */
+    private RecordView toRecordView(VisitorRecord record, OnlineVisitor live, long cutoff,
+                                    boolean showIp) {
         VisitorRecord.Spec spec = record.getSpec();
-        String pageTitle = spec.getLastPageTitle() != null ? spec.getLastPageTitle() : "";
+        boolean online = live != null || isOnline(record, cutoff);
+
+        Long firstSeen = spec.getFirstSeenAt();
+        if (live != null && (firstSeen == null || live.getFirstSeenAt() < firstSeen)) {
+            firstSeen = live.getFirstSeenAt();
+        }
+        Long lastSeen = live != null ? live.getLastSeenAt() : spec.getLastSeenAt();
+        String pageUrl = live != null ? live.getPageUrl() : spec.getLastPageUrl();
+        String pageTitle = live != null ? live.getPageTitle() : spec.getLastPageTitle();
+        Integer visitCount = spec.getVisitCount() != null
+            ? spec.getVisitCount() : (live != null ? live.getSessionCount() : null);
+        Integer pageViewCount = live != null ? live.getPageViewCount() : spec.getPageViewCount();
+        Long totalOnlineMs = live != null ? live.getTotalOnlineMs() : spec.getTotalOnlineMs();
+
         return new RecordView(
             record.getMetadata().getName(),
             showIp ? spec.getIp() : null,
@@ -430,13 +468,45 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             isBotRecord(spec),
             botReason(spec),
             spec.getFirstPageUrl(), spec.getFirstPageTitle(),
-            spec.getLastPageUrl(), pageTitle,
+            pageUrl, pageTitle != null ? pageTitle : "",
             spec.getLastReferer(), spec.getFirstReferer(),
-            spec.getFirstSeenAt(), spec.getLastSeenAt(),
-            spec.getVisitCount(), spec.getPageViewCount(), spec.getTotalOnlineMs(),
+            firstSeen, lastSeen,
+            visitCount, pageViewCount, totalOnlineMs,
             spec.getScreen(), spec.getViewport(), spec.getTimezone(), spec.getLanguage(),
             spec.getPlatform(), spec.getCpuCores(), spec.getDeviceMemory(), spec.getConnection(),
             online);
+    }
+
+    /**
+     * Builds a row straight from a live visitor that has not been persisted yet.
+     */
+    private RecordView toRecordView(OnlineVisitor visitor, boolean showIp) {
+        boolean bot = UaParser.isBot(visitor.getUserAgent())
+            || (visitor.getScreen() == null && visitor.getViewport() == null
+            && visitor.getTimezone() == null && visitor.getLanguage() == null);
+        String reason = null;
+        if (bot) {
+            reason = UaParser.isBot(visitor.getUserAgent())
+                ? UaParser.botReason(visitor.getUserAgent())
+                : "未上报屏幕、时区等浏览器信息";
+        }
+        return new RecordView(
+            visitor.getKey(),
+            showIp ? visitor.getIp() : null,
+            null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+            visitor.getUserAgent(),
+            UaParser.parse(visitor.getUserAgent()),
+            bot,
+            reason,
+            visitor.getPageUrl(), visitor.getPageTitle(),
+            visitor.getPageUrl(), visitor.getPageTitle() != null ? visitor.getPageTitle() : "",
+            visitor.getReferer(), visitor.getFirstReferer(),
+            visitor.getFirstSeenAt(), visitor.getLastSeenAt(),
+            visitor.getSessionCount(), visitor.getPageViewCount(), visitor.getTotalOnlineMs(),
+            visitor.getScreen(), visitor.getViewport(), visitor.getTimezone(),
+            visitor.getLanguage(), visitor.getPlatform(), visitor.getCpuCores(),
+            visitor.getDeviceMemory(), visitor.getConnection(),
+            true);
     }
 
     private LiveView toLiveView(OnlineVisitor visitor, boolean showIp) {

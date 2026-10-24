@@ -242,6 +242,26 @@ public class VisitorRecordService {
     }
 
     /**
+     * Flushes one live visitor immediately, so a console action (like a location
+     * lookup from the table) can persist against an existing record at once instead of
+     * waiting for the 20 second cycle.
+     */
+    public boolean flushVisitor(String key) {
+        OnlineVisitor visitor = registry.get(key);
+        if (visitor == null) {
+            return false;
+        }
+        try {
+            flush(visitor, System.currentTimeMillis());
+            return true;
+        } catch (Exception e) {
+            recordError(e);
+            log.warn("Failed to flush visitor {}", key, e);
+            return false;
+        }
+    }
+
+    /**
      * Stores a location result requested from the console. Returns the updated record
      * so the caller can answer with fresh data.
      */

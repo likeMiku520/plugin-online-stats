@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import axios from 'axios'
 
 interface UaInfo {
@@ -118,6 +118,8 @@ const copied = ref('')
 const geoLoading = ref(false)
 const geoError = ref('')
 const geoEndpoint = ref('')
+const rowBusy = reactive<Record<string, boolean>>({})
+const rowError = reactive<Record<string, string>>({})
 
 let pollTimer: number | undefined
 let searchTimer: number | undefined
@@ -188,6 +190,45 @@ async function lookupLocation(force = false) {
     geoError.value = status === 403 ? '没有权限调用查询接口' : '查询失败，请稍后重试'
   } finally {
     geoLoading.value = false
+  }
+}
+
+function applyLocation(item: RecordView, data: LocationView) {
+  item.location = data.location
+  item.country = data.country
+  item.countryCode = data.countryCode
+  item.region = data.province
+  item.city = data.city
+  item.districts = data.districts
+  item.isp = data.isp
+  item.net = data.net
+  item.idc = data.idc
+  item.zipcode = data.zipcode
+  item.areacode = data.areacode
+  item.protocol = data.protocol
+  item.dec = data.dec
+  item.geoResolvedAt = data.resolvedAt
+}
+
+async function lookupRow(item: RecordView) {
+  if (rowBusy[item.name]) {
+    return
+  }
+  rowBusy[item.name] = true
+  rowError[item.name] = ''
+  try {
+    const { data } = await axios.get<LocationView>(`${api}/location`, {
+      params: { name: item.name },
+    })
+    if (data.resolved) {
+      applyLocation(item, data)
+    } else {
+      rowError[item.name] = data.error || '查询失败'
+    }
+  } catch (e: any) {
+    rowError[item.name] = e?.response?.status === 403 ? '没有权限' : '查询失败'
+  } finally {
+    rowBusy[item.name] = false
   }
 }
 
@@ -390,57 +431,83 @@ onUnmounted(() => {
 
     <div class="os-page__card">
       <div class="os-toolbar">
-        <input
-          v-model="keyword"
-          class="os-toolbar__search"
-          type="search"
-          placeholder="搜索 IP、属地、页面标题或 UA"
-          @input="onKeyword"
-        />
-        <div class="os-toolbar__segment">
-          <button
-            v-for="option in [
-              { value: 'human', label: `真人 ${stats.humans ?? 0}` },
-              { value: 'bot', label: `机器人 ${stats.bots ?? 0}` },
-              { value: 'all', label: '全部' },
-            ]"
-            :key="option.value"
-            type="button"
-            :class="{ 'is-active': visitorType === option.value }"
-            @click="setVisitorType(option.value as 'human' | 'bot' | 'all')"
-          >
-            {{ option.label }}
-          </button>
+        <div class="os-toolbar__row">
+          <input
+            v-model="keyword"
+            class="os-toolbar__search"
+            type="search"
+            placeholder="搜索 IP、属地、页面标题或 UA"
+            @input="onKeyword"
+          />
+          <button class="os-toolbar__refresh" type="button" @click="load()">刷新</button>
         </div>
-        <div class="os-toolbar__segment">
-          <button
-            v-for="option in [
-              { value: 'all', label: '全部' },
-              { value: 'online', label: '在线' },
-              { value: 'offline', label: '离线' },
-            ]"
-            :key="option.value"
-            type="button"
-            :class="{ 'is-active': status === option.value }"
-            @click="setStatus(option.value as 'all' | 'online' | 'offline')"
-          >
-            {{ option.label }}
-          </button>
+        <div class="os-toolbar__row">
+          <div class="os-toolbar__segment">
+            <button
+              v-for="option in [
+                { value: 'human', label: `真人 ${stats.humans ?? 0}` },
+                { value: 'bot', label: `机器人 ${stats.bots ?? 0}` },
+                { value: 'all', label: '全部' },
+              ]"
+              :key="option.value"
+              type="button"
+              :class="{ 'is-active': visitorType === option.value }"
+              @click="setVisitorType(option.value as 'human' | 'bot' | 'all')"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <div class="os-toolbar__segment">
+            <button
+              v-for="option in [
+                { value: 'all', label: '全部' },
+                { value: 'online', label: '在线' },
+                { value: 'offline', label: '离线' },
+              ]"
+              :key="option.value"
+              type="button"
+              :class="{ 'is-active': status === option.value }"
+              @click="setStatus(option.value as 'all' | 'online' | 'offline')"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <div class="os-toolbar__sort">
+            <span class="os-toolbar__label">排序</span>
+            <div class="os-toolbar__segment">
+              <button
+                v-for="option in [
+                  { value: 'lastSeenAt', label: '最近活跃' },
+                  { value: 'firstSeenAt', label: '首次访问' },
+                  { value: 'visits', label: '访问次数' },
+                ]"
+                :key="option.value"
+                type="button"
+                :class="{ 'is-active': sort === option.value }"
+                @click="setSort(option.value as 'lastSeenAt' | 'firstSeenAt' | 'visits')"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
         </div>
-        <select
-          class="os-toolbar__select"
-          :value="sort"
-          @change="setSort(($event.target as HTMLSelectElement).value as 'lastSeenAt' | 'firstSeenAt' | 'visits')"
-        >
-          <option value="lastSeenAt">按最后活跃排序</option>
-          <option value="firstSeenAt">按首次访问排序</option>
-          <option value="visits">按访问次数排序</option>
-        </select>
-        <button class="os-toolbar__refresh" type="button" @click="load()">刷新</button>
       </div>
 
       <div v-if="loading && !items.length" class="os-page__loading">加载中…</div>
-      <div v-else-if="!items.length" class="os-page__empty">暂无访客记录</div>
+      <div v-else-if="!items.length" class="os-page__empty">
+        <template v-if="stats.online > 0">
+          当前有 {{ stats.online }} 位访客在线，但没有符合当前筛选条件的记录。
+          <button
+            v-if="visitorType === 'human' && (stats.bots ?? 0) > 0"
+            class="os-empty__btn"
+            type="button"
+            @click="setVisitorType('bot')"
+          >
+            查看机器人（{{ stats.bots }}）
+          </button>
+        </template>
+        <template v-else>暂无访客记录</template>
+      </div>
       <table v-else class="os-table">
         <thead>
           <tr>
@@ -461,7 +528,19 @@ onUnmounted(() => {
                   <div class="os-visitor__ip">{{ item.ip || '已隐藏' }}</div>
                   <div class="os-visitor__loc">
                     <span v-if="item.bot" class="os-badge os-badge--bot">机器人</span>
-                    {{ item.location || '未查询属地' }}
+                    <template v-if="item.location">{{ item.location }}</template>
+                    <button
+                      v-else
+                      class="os-loc-btn"
+                      type="button"
+                      :disabled="rowBusy[item.name]"
+                      @click="lookupRow(item)"
+                    >
+                      {{ rowBusy[item.name] ? '查询中…' : '查询属地' }}
+                    </button>
+                    <span v-if="rowError[item.name]" class="os-loc-error">
+                      {{ rowError[item.name] }}
+                    </span>
                     <span v-if="item.idc" class="os-badge os-badge--warn">{{ item.idc }}</span>
                   </div>
                 </div>
@@ -794,11 +873,29 @@ onUnmounted(() => {
 
 .os-toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 0.5rem;
-  align-items: center;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid #f3f4f6;
+
+  &__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  &__sort {
+    display: flex;
+    gap: 0.375rem;
+    align-items: center;
+    margin-left: auto;
+  }
+
+  &__label {
+    font-size: 0.75rem;
+    color: #9ca3af;
+  }
 
   &__search {
     flex: 1 1 16rem;
@@ -998,6 +1095,45 @@ onUnmounted(() => {
     color: #6b7280;
     background: #e5e7eb;
   }
+}
+
+.os-loc-btn {
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: #1B9C93;
+  cursor: pointer;
+  background: #E8F9F7;
+  border: 1px solid #B9E7E3;
+  border-radius: 0.25rem;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: #D5F3F0;
+  }
+
+  &:disabled {
+    color: #9ca3af;
+    cursor: wait;
+    background: #f3f4f6;
+    border-color: #e5e7eb;
+  }
+}
+
+.os-loc-error {
+  font-size: 0.6875rem;
+  color: #b91c1c;
+}
+
+.os-empty__btn {
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  color: #1B9C93;
+  cursor: pointer;
+  background: #E8F9F7;
+  border: 1px solid #B9E7E3;
+  border-radius: 0.25rem;
 }
 
 .os-pager {
