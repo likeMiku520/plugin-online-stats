@@ -198,8 +198,116 @@
 
 ## 数据模型
 
-自定义模型 `VisitorRecord`：
+自定义模型：
 
-- apiVersion：`online-stats.halo.run/v1alpha1`
-- kind：`VisitorRecord`
-- 名称：`v-` + `sha256(ip + "|" + userAgent)` 前 16 位，同一设备多次访问合并为一条
+- `VisitorRecord`（`visitorrecords`）：单个访客的历史记录，名称是 `v-` + `sha256(IP + "|" + UA)` 前 16 位
+- `ArticleStat`（`articlestats`）：单篇文章的聚合统计，名称与 Halo 的 Post 资源名一致
+- `DailyStat`（`dailystats`）：按天聚合的统计，名称是 `yyyy-MM-dd`
+
+## 统计接口
+
+以下接口都属于 `statistics` 资源，需要管理员权限。
+
+### 总览
+
+`GET /statistics/overview`
+
+```json
+{
+  "views": 1280,
+  "visitors": 356,
+  "uniqueVisitors": 356,
+  "officialViews": 1310,
+  "totalOnlineMs": 86400000,
+  "todayViews": 42,
+  "todayVisitors": 18,
+  "online": 3,
+  "articles": 27,
+  "onlineSince": "2024-06-01",
+  "loaded": true
+}
+```
+
+- `views` / `visitors`：插件统计的文章浏览量与去重访客
+- `officialViews`：Halo 官方计数器（`counters.visit`）的总和
+- `onlineSince`：设置里的博客上线日期，未配置时取最早有记录的一天
+
+### 访问趋势
+
+`GET /statistics/trend?days=30`
+
+```json
+{
+  "days": 30,
+  "launchDate": "2024-06-01",
+  "series": [
+    { "date": "2026-10-01", "views": 12, "visitors": 9, "cumulative": 1180 }
+  ],
+  "daily30": [{ "date": "2026-10-01", "views": 12, "visitors": 9 }],
+  "daily7": [{ "date": "2026-10-24", "views": 42, "visitors": 18 }]
+}
+```
+
+`series` 是从上线日期（或 `days` 窗口起点）到今天、补齐空缺日期的连续序列，可直接用于画曲线图。
+
+### 文章列表
+
+`GET /statistics/articles?sort=views&limit=50`
+
+`sort` 支持 `views`、`visitors`、`today`、`duration`。
+
+```json
+{
+  "sort": "views",
+  "items": [
+    {
+      "postName": "post-abc",
+      "title": "示例文章",
+      "slug": "hello",
+      "permalink": "/archives/hello",
+      "views": 120,
+      "officialViews": 131,
+      "visitors": 88,
+      "todayViews": 5,
+      "todayVisitors": 4,
+      "totalOnlineMs": 3600000,
+      "avgOnlineMs": 40909,
+      "browsers": [{ "name": "Chrome", "views": 70 }],
+      "systems": [{ "name": "Windows 10/11", "views": 60 }],
+      "referrers": [{ "name": "直接访问", "views": 40 }]
+    }
+  ]
+}
+```
+
+### 文章下钻
+
+`GET /statistics/articles/{postName}`
+
+返回该文章的完整统计，外加 `visitors` 数组：每个访客看了几次、累计停留多久、最后访问时间、IP（受 IP 显示开关控制）。
+
+### 来源统计
+
+`GET /statistics/sources?dimension=browser&days=30`
+
+`dimension` 支持 `browser`、`system`、`referer`。也支持用 `from`、`to` 指定日期区间。
+
+```json
+{
+  "dimension": "browser",
+  "totalViews": 1280,
+  "items": [{ "name": "Chrome", "views": 700, "visitors": 210 }]
+}
+```
+
+### 来源下钻
+
+`GET /statistics/sources/detail?dimension=browser&value=Chrome&days=30`
+
+返回该来源下的访客清单：`views`、`visitors` 与 `items`（每个访客看了几次、对应 IP）。
+
+### 单个访客的全部行为
+
+`GET /statistics/visitors/{visitorKey}`
+
+返回这个访客看过哪些文章、各看了几次、停留多久，以及总浏览量与总停留时长。

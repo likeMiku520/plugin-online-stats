@@ -8,9 +8,25 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Boolean showIpInConsole,
                                   String geoEndpoint,
                                   Integer historyRetentionDays,
-                                  Integer maxRecords) {
+                                  Integer maxRecords,
+                                  String siteLaunchDate) {
 
     public static final String GROUP = "basic";
+
+    /**
+     * Blog launch date (yyyy-MM-dd). Trend charts start here; the plugin can only count
+     * visits that happen after it was enabled, earlier days simply show as zero.
+     */
+    public String siteLaunchDateOrDefault() {
+        if (siteLaunchDate == null || siteLaunchDate.isBlank()) {
+            return null;
+        }
+        try {
+            return java.time.LocalDate.parse(siteLaunchDate.trim()).toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
 
     public int heartbeatIntervalOrDefault() {
         return heartbeatInterval != null ? heartbeatInterval : 15;

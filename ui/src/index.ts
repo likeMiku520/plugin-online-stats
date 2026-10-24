@@ -1,7 +1,8 @@
 import { definePlugin } from '@halo-dev/console-shared'
 import { markRaw } from 'vue'
-import OnlineStatsIcon from '~icons/ri/eye-line'
-import OnlineStatsPage from './views/OnlineStatsPage.vue'
+import RiBarChartBoxLine from '~icons/ri/bar-chart-box-line'
+import StatisticsPage from './views/StatisticsPage.vue'
+import VisitorsPage from './views/OnlineStatsPage.vue'
 
 export default definePlugin({
   components: {},
@@ -11,14 +12,32 @@ export default definePlugin({
       route: {
         path: '/online-stats',
         name: 'OnlineStats',
-        component: OnlineStatsPage,
+        component: StatisticsPage,
         meta: {
-          title: '在线访客统计',
+          title: '访问统计',
           searchable: true,
           menu: {
-            name: '在线访客统计',
-            group: '内容',
-            icon: markRaw(OnlineStatsIcon),
+            name: '访问统计',
+            group: '系统',
+            icon: markRaw(RiBarChartBoxLine),
+            priority: 0,
+          },
+        },
+      },
+    },
+    {
+      parentName: 'Root',
+      route: {
+        path: '/online-stats/visitors',
+        name: 'OnlineStatsVisitors',
+        component: VisitorsPage,
+        meta: {
+          title: '访客明细',
+          searchable: true,
+          menu: {
+            name: '访客明细',
+            group: '系统',
+            icon: markRaw(RiBarChartBoxLine),
             priority: 1,
           },
         },

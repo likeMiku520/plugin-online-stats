@@ -14,6 +14,7 @@ public class OnlineVisitor {
     private final long firstSeenAt;
 
     private volatile String visitorId;
+    private volatile String postName;
     private volatile String pageUrl;
     private volatile String pageTitle;
     private volatile String referer;
@@ -50,10 +51,13 @@ public class OnlineVisitor {
      * Applies one heartbeat payload. Fields that the client did not send keep their
      * previous value instead of being cleared.
      */
-    public void touch(String visitorId, String url, String title, String ref,
+    public void touch(String visitorId, String postName, String url, String title, String ref,
                       String screen, String viewport, String timezone, String language,
                       String platform, String cores, String memory, String connection,
                       long now) {
+        if (postName != null && !postName.isBlank()) {
+            this.postName = postName;
+        }
         long gap = now - lastSeenAt;
         if (gap > 0 && gap <= MAX_GAP_MS) {
             totalOnlineMs += gap;
@@ -155,6 +159,10 @@ public class OnlineVisitor {
 
     public String getVisitorId() {
         return visitorId;
+    }
+
+    public String getPostName() {
+        return postName;
     }
 
     public String getPageUrl() {

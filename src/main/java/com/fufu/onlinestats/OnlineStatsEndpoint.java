@@ -17,6 +17,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -54,17 +56,25 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private final OnlineVisitorRegistry registry;
     private final VisitorRecordService recordService;
     private final IpGeoService ipGeoService;
+    private final StatsAggregationService statsService;
+    private final StatisticsQueryService queryService;
     private final ReactiveSettingFetcher settingFetcher;
+
+    private static final Logger log = LoggerFactory.getLogger(OnlineStatsEndpoint.class);
 
     private final Map<String, long[]> rateBuckets = new ConcurrentHashMap<>();
 
     public OnlineStatsEndpoint(OnlineVisitorRegistry registry,
                                VisitorRecordService recordService,
                                IpGeoService ipGeoService,
+                               StatsAggregationService statsService,
+                               StatisticsQueryService queryService,
                                ReactiveSettingFetcher settingFetcher) {
         this.registry = registry;
         this.recordService = recordService;
         this.ipGeoService = ipGeoService;
+        this.statsService = statsService;
+        this.queryService = queryService;
         this.settingFetcher = settingFetcher;
     }
 
@@ -84,6 +94,13 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/records", this::listRecords)
             .GET("/records/{name}", this::getRecord)
             .GET("/location", this::getLocation)
+            .GET("/statistics/overview", this::getOverview)
+            .GET("/statistics/trend", this::getTrend)
+            .GET("/statistics/articles", this::getArticles)
+            .GET("/statistics/articles/{postName}", this::getArticleDetail)
+            .GET("/statistics/sources", this::getSources)
+            .GET("/statistics/sources/detail", this::getSourceDetail)
+            .GET("/statistics/visitors/{visitorKey}", this::getVisitorDetail)
             .build();
     }
 
@@ -121,8 +138,14 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .onErrorResume(e -> Mono.empty())
             .defaultIfEmpty(Map.of())
             .flatMap(body -> fetchSettings().flatMap(settings -> {
-                registry.heartbeat(ip, userAgent, toHeartbeat(body),
-                    System.currentTimeMillis(), settings.onlineTimeoutMillis());
+                long now = System.currentTimeMillis();
+                OnlineVisitor visitor = registry.heartbeat(ip, userAgent, toHeartbeat(body),
+                    now, settings.onlineTimeoutMillis());
+                try {
+                    statsService.record(visitor, settings, now);
+                } catch (Exception e) {
+                    log.debug("Failed to aggregate heartbeat: {}", e.toString());
+                }
                 return ServerResponse.ok().bodyValue(Map.of("ok", true));
             }));
     }
@@ -130,6 +153,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private OnlineVisitorRegistry.Heartbeat toHeartbeat(Map<String, Object> body) {
         return new OnlineVisitorRegistry.Heartbeat(
             str(body, "visitorId", MAX_VISITOR_ID),
+            str(body, "postName", MAX_SHORT),
             str(body, "url", MAX_URL),
             str(body, "title", MAX_TITLE),
             str(body, "referer", MAX_URL),
@@ -520,6 +544,76 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             visitor.getLastSeenAt());
     }
 
+    private Mono<ServerResponse> getOverview(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> ServerResponse.ok().bodyValue(
+            queryService.overview(settings, registry.count(settings.onlineTimeoutMillis()))));
+    }
+
+    private Mono<ServerResponse> getTrend(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> {
+            int days = positiveInt(request.queryParam("days").orElse(null), 30);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("days", days);
+            payload.put("launchDate", settings.siteLaunchDateOrDefault());
+            payload.put("series", queryService.cumulativeTrend(settings, days));
+            payload.put("daily30", queryService.trend(settings, 30));
+            payload.put("daily7", queryService.trend(settings, 7));
+            return ServerResponse.ok().bodyValue(payload);
+        });
+    }
+
+    private Mono<ServerResponse> getArticles(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> {
+            String sort = request.queryParam("sort").orElse("views");
+            int limit = positiveInt(request.queryParam("limit").orElse(null), 50);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sort", sort);
+            payload.put("items", queryService.articleList(settings, sort, limit, null, null));
+            return ServerResponse.ok().bodyValue(payload);
+        });
+    }
+
+    private Mono<ServerResponse> getArticleDetail(ServerRequest request) {
+        String postName = request.pathVariable("postName");
+        return fetchSettings().flatMap(settings -> {
+            Map<String, Object> detail = queryService.articleDetail(postName, settings, 200);
+            if (detail == null) {
+                return ServerResponse.notFound().build();
+            }
+            return ServerResponse.ok().bodyValue(detail);
+        });
+    }
+
+    private Mono<ServerResponse> getSources(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> {
+            String dimension = request.queryParam("dimension").orElse("browser");
+            int days = positiveInt(request.queryParam("days").orElse(null), 30);
+            String from = request.queryParam("from").orElse(null);
+            String to = request.queryParam("to").orElse(null);
+            return ServerResponse.ok()
+                .bodyValue(queryService.sources(settings, days, dimension, from, to));
+        });
+    }
+
+    private Mono<ServerResponse> getSourceDetail(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> {
+            String dimension = request.queryParam("dimension").orElse("browser");
+            String value = request.queryParam("value").orElse("");
+            int days = positiveInt(request.queryParam("days").orElse(null), 30);
+            if (value.isBlank()) {
+                return ServerResponse.badRequest().bodyValue(Map.of("error", "missing value"));
+            }
+            return ServerResponse.ok()
+                .bodyValue(queryService.sourceDetail(settings, days, dimension, value));
+        });
+    }
+
+    private Mono<ServerResponse> getVisitorDetail(ServerRequest request) {
+        String visitorKey = request.pathVariable("visitorKey");
+        return fetchSettings().flatMap(settings -> ServerResponse.ok()
+            .bodyValue(queryService.visitorDetail(visitorKey, settings)));
+    }
+
     private String readScript() {
         try (InputStream is =
                  OnlineStatsEndpoint.class.getResourceAsStream("/static/online-stats.js")) {
@@ -534,7 +628,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
 
     private Mono<OnlineStatsSettings> fetchSettings() {
         return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null));
+            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null));
     }
 
     private String resolveClientIp(ServerRequest request) {

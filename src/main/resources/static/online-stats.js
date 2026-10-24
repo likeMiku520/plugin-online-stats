@@ -1,7 +1,6 @@
 /* Online-stats tracker.
- * Reports a heartbeat every few seconds so the server can count online visitors and
- * build visit history. It deliberately renders nothing: the floating widget was
- * removed, online numbers are consumed through the public API.
+ * Reports a heartbeat with the current page and, on article pages, the post name so
+ * the plugin can attribute views to a specific article. It renders nothing.
  * The server injects window.__ONLINE_STATS__ (heartbeatInterval) before this body runs.
  */
 (function () {
@@ -28,6 +27,24 @@
     return String(value);
   }
 
+  /* Halo themes expose the post name through a meta tag or a body class depending on
+   * the theme, so try the common places before giving up. */
+  function postName() {
+    var meta = document.querySelector('meta[name="halo-post-name"]');
+    if (meta && meta.content) {
+      return meta.content;
+    }
+    var article = document.querySelector('[data-post-name]');
+    if (article) {
+      return article.getAttribute('data-post-name');
+    }
+    var body = document.body;
+    if (body && body.dataset && body.dataset.postName) {
+      return body.dataset.postName;
+    }
+    return '';
+  }
+
   function timezone() {
     try {
       return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
@@ -47,13 +64,15 @@
   }
 
   function languages() {
-    var list = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+    var list = navigator.languages && navigator.languages.length
+      ? navigator.languages : [navigator.language];
     return list.filter(Boolean).join(',');
   }
 
   function payload() {
     return {
       visitorId: vid,
+      postName: postName(),
       url: location.pathname + location.search,
       title: document.title,
       referer: document.referrer,

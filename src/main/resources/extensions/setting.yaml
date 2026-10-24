@@ -31,6 +31,11 @@ spec:
           label: IP 属地查询接口
           help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在访客详情里点击「查询属地」时才会请求。
           value: "https://api.mir6.com/api/ip?ip=%s&type=json"
+        - $formkit: text
+          name: siteLaunchDate
+          label: 博客上线日期
+          help: 格式 yyyy-MM-dd，例如 2024-06-01。访问趋势图从这一天开始画；插件只能统计启用之后的访问，更早的日期会显示为 0。
+          value: ""
         - $formkit: number
           name: historyRetentionDays
           label: 历史记录保留天数

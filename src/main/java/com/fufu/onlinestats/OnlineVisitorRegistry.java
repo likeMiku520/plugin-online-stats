@@ -35,10 +35,11 @@ public class OnlineVisitorRegistry {
             } else if (now - current.getLastSeenAt() > timeoutMillis) {
                 current.markResumed();
             }
-            current.touch(heartbeat.visitorId(), heartbeat.url(), heartbeat.title(),
-                heartbeat.referer(), heartbeat.screen(), heartbeat.viewport(),
-                heartbeat.timezone(), heartbeat.language(), heartbeat.platform(),
-                heartbeat.cores(), heartbeat.memory(), heartbeat.connection(), now);
+            current.touch(heartbeat.visitorId(), heartbeat.postName(), heartbeat.url(),
+                heartbeat.title(), heartbeat.referer(), heartbeat.screen(),
+                heartbeat.viewport(), heartbeat.timezone(), heartbeat.language(),
+                heartbeat.platform(), heartbeat.cores(), heartbeat.memory(),
+                heartbeat.connection(), now);
             return current;
         });
         if (visitors.size() >= MAX_VISITORS) {
@@ -95,8 +96,9 @@ public class OnlineVisitorRegistry {
     /**
      * One heartbeat payload, already sanitized by the endpoint.
      */
-    public record Heartbeat(String visitorId, String url, String title, String referer,
-                            String screen, String viewport, String timezone, String language,
-                            String platform, String cores, String memory, String connection) {
+    public record Heartbeat(String visitorId, String postName, String url, String title,
+                            String referer, String screen, String viewport, String timezone,
+                            String language, String platform, String cores, String memory,
+                            String connection) {
     }
 }
