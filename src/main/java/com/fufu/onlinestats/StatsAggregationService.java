@@ -57,6 +57,8 @@ public class StatsAggregationService {
     private volatile int unresolvedHeartbeats;
     private volatile String lastHeartbeatUrl;
     private volatile long officialViewsTotal;
+    private volatile int counterCountTotal;
+    private final Map<String, Long> officialByPost = new ConcurrentHashMap<>();
 
     public StatsAggregationService(ReactiveExtensionClient client) {
         this.client = client;
@@ -128,38 +130,52 @@ public class StatsAggregationService {
     }
 
     /**
-     * Refreshes the official view counts from Halo's own counter resources. Halo names
-     * counters "posts.content.halo.run/{postName}", so the post name is the suffix.
+     * Refreshes official view counts. The site wide total sums every counter exactly the
+     * way Halo's own siteStatsFinder does, because counters also exist for single pages
+     * and other content; per-article numbers come from the post counters.
      */
     public void refreshOfficialCounts() {
         long[] total = {0L};
+        Map<String, Long> perPost = new ConcurrentHashMap<>();
+        int[] counterCount = {0};
         listAll(Counter.class).subscribe(counter -> {
+            Integer visit = counter.getVisit();
+            long value = visit == null ? 0L : visit;
+            total[0] += value;
+            counterCount[0]++;
             String raw = nameOf(counter.getMetadata());
-            if (raw == null) {
+            if (raw == null || !raw.startsWith(COUNTER_PREFIX)) {
                 return;
             }
-            Integer visit = counter.getVisit();
-            if (visit != null && raw.startsWith(COUNTER_PREFIX)) {
-                total[0] += visit;
-            }
-            String postName = raw.startsWith(COUNTER_PREFIX)
-                ? raw.substring(COUNTER_PREFIX.length()) : raw;
+            String postName = raw.substring(COUNTER_PREFIX.length());
+            perPost.put(postName, value);
             ArticleStat stat = articleIndex.get(postName);
             if (stat == null) {
                 return;
             }
-            if (visit == null || Long.valueOf(visit).equals(stat.getSpec().getOfficialViews())) {
+            if (Long.valueOf(value).equals(stat.getSpec().getOfficialViews())) {
                 return;
             }
-            stat.getSpec().setOfficialViews((long) visit);
+            stat.getSpec().setOfficialViews(value);
             saveArticle(stat);
         }, error -> log.debug("Failed to read official counters: {}", error.toString()),
-            () -> officialViewsTotal = total[0]);
+            () -> {
+                officialViewsTotal = total[0];
+                counterCountTotal = counterCount[0];
+                officialByPost.clear();
+                officialByPost.putAll(perPost);
+                log.debug("Official views: {} across {} counters", total[0], counterCount[0]);
+            });
     }
 
-    /** Sum of every Halo counter, including posts this plugin has never observed. */
+    /** Sum of every Halo counter, matching the number Halo itself reports. */
     public long officialViewsTotal() {
         return officialViewsTotal;
+    }
+
+    /** Official visit count per post name, whether or not this plugin saw the visit. */
+    public Map<String, Long> officialByPost() {
+        return officialByPost;
     }
 
     /**
@@ -549,6 +565,9 @@ public class StatsAggregationService {
         info.put("days", dailyIndex.size());
         info.put("unresolvedHeartbeats", unresolvedHeartbeats);
         info.put("lastHeartbeatUrl", lastHeartbeatUrl);
+        info.put("officialViewsTotal", officialViewsTotal);
+        info.put("counters", counterCountTotal);
+        info.put("officialPosts", officialByPost.size());
         return info;
     }
 }

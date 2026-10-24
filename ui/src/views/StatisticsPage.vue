@@ -8,11 +8,14 @@ interface Overview {
   visitors: number
   uniqueVisitors: number
   officialViews: number
+  officialViewsRaw: number
+  officialViewsAdjustment: number
   officialViewsOnTracked: number
   todayViews: number
   todayVisitors: number
   online: number
   articles: number
+  trackedArticles: number
   loaded: boolean
   posts: number
   unresolvedHeartbeats: number
@@ -38,6 +41,7 @@ interface ArticleRow {
   totalOnlineMs: number
   avgOnlineMs: number
   lastSeenAt: number | null
+  tracked: boolean
 }
 
 const api = '/apis/online-stats.halo.run/v1alpha1'
@@ -155,9 +159,11 @@ async function openArticle(postName: string, title: string | null) {
     drill.value = {
       open: true,
       title: title || '文章详情',
-      subtitle: `本插件统计 ${a.views} 次浏览 · ${a.visitors} 位访客 · 平均停留 ${fmtDuration(
-        a.avgOnlineMs,
-      )} · Halo 官方记录 ${a.officialViews} 次`,
+      subtitle: a.tracked
+        ? `Halo 官方 ${a.officialViews} 次浏览 · 插件统计 ${a.visitors} 位访客 · 平均停留 ${fmtDuration(
+            a.avgOnlineMs,
+          )}`
+        : `Halo 官方 ${a.officialViews} 次浏览 · 插件没有记录到这篇文章的访问明细`,
       loading: false,
       kind: 'article',
       rows,
@@ -282,15 +288,18 @@ onUnmounted(() => {
       </div>
       <div class="os-card">
         <span class="os-card__label">总浏览量</span>
-        <span class="os-card__value">{{ overview.views }}</span>
+        <span class="os-card__value">{{ overview.officialViews }}</span>
         <span class="os-card__hint">
-          Halo 官方计数 {{ overview.officialViews }}
+          Halo 官方数据
+          <template v-if="(overview.officialViewsAdjustment ?? 0) > 0">
+            · 含修正 {{ overview.officialViewsAdjustment }}
+          </template>
         </span>
       </div>
       <div class="os-card">
         <span class="os-card__label">总访客</span>
         <span class="os-card__value">{{ overview.uniqueVisitors }}</span>
-        <span class="os-card__hint">去重设备指纹</span>
+        <span class="os-card__hint">插件统计的去重访客</span>
       </div>
       <div class="os-card">
         <span class="os-card__label">今日浏览</span>
@@ -300,7 +309,7 @@ onUnmounted(() => {
       <div class="os-card">
         <span class="os-card__label">文章数</span>
         <span class="os-card__value">{{ overview.articles }}</span>
-        <span class="os-card__hint">被访问过的文章</span>
+        <span class="os-card__hint">官方有浏览记录的文章</span>
       </div>
     </div>
 
@@ -371,7 +380,7 @@ onUnmounted(() => {
           <button
             v-for="option in [
               { value: 'views', label: '总浏览量' },
-              { value: 'visitors', label: '总访客' },
+              { value: 'visitors', label: '访客数' },
               { value: 'today', label: '今日浏览' },
               { value: 'duration', label: '停留时长' },
             ]"
@@ -389,8 +398,7 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th>文章</th>
-            <th class="os-right">插件浏览</th>
-            <th class="os-right">官方浏览</th>
+            <th class="os-right">浏览量</th>
             <th class="os-right">访客数</th>
             <th class="os-right">今日浏览</th>
             <th class="os-right">平均停留</th>
@@ -403,11 +411,10 @@ onUnmounted(() => {
               <div class="os-article__title">{{ item.title || item.slug || item.postName }}</div>
               <div class="os-article__slug">{{ item.permalink || item.slug }}</div>
             </td>
-            <td class="os-right">{{ item.views }}</td>
-            <td class="os-right os-muted">{{ item.officialViews }}</td>
-            <td class="os-right">{{ item.visitors }}</td>
-            <td class="os-right">{{ item.todayViews }}</td>
-            <td class="os-right">{{ fmtDuration(item.avgOnlineMs) }}</td>
+            <td class="os-right os-strong">{{ item.officialViews }}</td>
+            <td class="os-right">{{ item.tracked ? item.visitors : '—' }}</td>
+            <td class="os-right">{{ item.tracked ? item.todayViews : '—' }}</td>
+            <td class="os-right">{{ item.tracked ? fmtDuration(item.avgOnlineMs) : '—' }}</td>
             <td class="os-right">
               <button class="os-btn os-btn--tiny" type="button" @click="openArticle(item.postName, item.title)">
                 详情
@@ -722,6 +729,11 @@ onUnmounted(() => {
 
 .os-muted {
   color: #9ca3af;
+}
+
+.os-strong {
+  font-weight: 600;
+  color: #0f172a;
 }
 
 .os-article__title {

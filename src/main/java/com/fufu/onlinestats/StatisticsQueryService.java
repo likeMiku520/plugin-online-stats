@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
+import run.halo.app.core.extension.content.Post;
 
 /**
  * Read model for the console. Everything is computed from the pre-aggregated article
@@ -47,10 +48,10 @@ public class StatisticsQueryService {
             todayViews += nvl(spec.getTodayViews());
             todayVisitors += nvl(spec.getTodayVisitors());
         }
-        // Articles that were never visited by this plugin still have official counts, so the
-        // aggregation service reports the full official total separately. The adjustment
-        // lets a migrated blog add its historical total back in.
-        long officialTotal = stats.officialViewsTotal() + settings.officialViewsAdjustmentOrDefault();
+        // The headline view number is Halo's own total (every counter, exactly like
+// siteStatsFinder), optionally corrected for history that predates this blog.
+        long adjustment = settings.officialViewsAdjustmentOrDefault();
+        long officialTotal = stats.officialViewsTotal() + adjustment;
 
         long totalVisitors = uniqueVisitors(days);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -58,12 +59,15 @@ public class StatisticsQueryService {
         result.put("visitors", visitors);
         result.put("uniqueVisitors", totalVisitors);
         result.put("officialViews", officialTotal);
+        result.put("officialViewsRaw", stats.officialViewsTotal());
+        result.put("officialViewsAdjustment", adjustment);
         result.put("officialViewsOnTracked", officialViews);
         result.put("totalOnlineMs", duration);
         result.put("todayViews", todayViews);
         result.put("todayVisitors", todayVisitors);
         result.put("online", onlineNow);
-        result.put("articles", articles.size());
+        result.put("articles", stats.officialByPost().size());
+        result.put("trackedArticles", articles.size());
         result.put("days", days.size());
         result.put("today", today);
         result.put("loaded", stats.isLoaded());
@@ -157,47 +161,87 @@ public class StatisticsQueryService {
         return result;
     }
 
+    /**
+     * Article ranking built from every published post joined with Halo's own counters,
+     * so articles the plugin never saw still appear with their official view count.
+     */
     public List<Map<String, Object>> articleList(OnlineStatsSettings settings, String sort,
                                                  int limit, String from, String to) {
-        List<ArticleStat> articles = stats.articles();
-        Comparator<ArticleStat> comparator = switch (sort == null ? "" : sort) {
-            case "visitors" -> Comparator.comparingLong(
-                (ArticleStat a) -> nvl(a.getSpec().getVisitors()));
-            case "today" -> Comparator.comparingLong(
-                (ArticleStat a) -> nvl(a.getSpec().getTodayViews()));
-            case "duration" -> Comparator.comparingLong(
-                (ArticleStat a) -> nvl(a.getSpec().getTotalOnlineMs()));
-            default -> Comparator.comparingLong(
-                (ArticleStat a) -> nvl(a.getSpec().getViews()));
-        };
+        Map<String, Long> official = stats.officialByPost();
+        Map<String, ArticleStat> tracked = new LinkedHashMap<>();
+        for (ArticleStat article : stats.articles()) {
+            tracked.put(article.getMetadata().getName(), article);
+        }
+
         List<Map<String, Object>> items = new ArrayList<>();
-        articles.stream()
-            .sorted(comparator.reversed())
-            .limit(limit <= 0 ? 50 : limit)
-            .forEach(article -> items.add(articleView(article, settings)));
-        return items;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (Post post : stats.posts()) {
+            String name = post.getMetadata().getName();
+            seen.add(name);
+            items.add(articleView(post, tracked.get(name), official.get(name), settings));
+        }
+        // Articles the plugin recorded but whose post is no longer published.
+        for (ArticleStat article : tracked.values()) {
+            String name = article.getMetadata().getName();
+            if (!seen.contains(name)) {
+                items.add(articleView(null, article, official.get(name), settings));
+            }
+        }
+
+        Comparator<Map<String, Object>> comparator = switch (sort == null ? "" : sort) {
+            case "visitors" -> Comparator.comparingLong(
+                row -> number(row.get("visitors")));
+            case "today" -> Comparator.comparingLong(
+                row -> number(row.get("todayViews")));
+            case "duration" -> Comparator.comparingLong(
+                row -> number(row.get("totalOnlineMs")));
+            default -> Comparator.comparingLong(
+                row -> number(row.get("officialViews")));
+        };
+        items.sort(comparator.reversed());
+        return items.size() > (limit <= 0 ? 50 : limit)
+            ? new ArrayList<>(items.subList(0, limit <= 0 ? 50 : limit)) : items;
     }
 
-    public Map<String, Object> articleView(ArticleStat article, OnlineStatsSettings settings) {
-        ArticleStat.Spec spec = article.getSpec();
+    private static long number(Object value) {
+        return value instanceof Number n ? n.longValue() : 0L;
+    }
+
+    /**
+     * One ranking row. Either the post or the stat may be missing: a post with official
+     * views but no plugin data still shows up, and so does a stat whose post was removed.
+     */
+    public Map<String, Object> articleView(Post post, ArticleStat article,
+                                           Long officialViews, OnlineStatsSettings settings) {
+        ArticleStat.Spec spec = article == null ? null : article.getSpec();
+        String name = post != null ? post.getMetadata().getName()
+            : article.getMetadata().getName();
+        long visitors = spec == null ? 0L : nvl(spec.getVisitors());
+        long duration = spec == null ? 0L : nvl(spec.getTotalOnlineMs());
+        long official = officialViews != null ? officialViews
+            : (spec == null ? 0L : nvl(spec.getOfficialViews()));
+
         Map<String, Object> item = new LinkedHashMap<>();
-        item.put("postName", article.getMetadata().getName());
-        item.put("title", spec.getTitle());
-        item.put("slug", spec.getSlug());
-        item.put("permalink", spec.getPermalink());
-        item.put("views", nvl(spec.getViews()));
-        item.put("officialViews", nvl(spec.getOfficialViews()));
-        item.put("visitors", nvl(spec.getVisitors()));
-        item.put("todayViews", nvl(spec.getTodayViews()));
-        item.put("todayVisitors", nvl(spec.getTodayVisitors()));
-        item.put("totalOnlineMs", nvl(spec.getTotalOnlineMs()));
-        item.put("avgOnlineMs", nvl(spec.getVisitors()) == 0 ? 0L
-            : nvl(spec.getTotalOnlineMs()) / nvl(spec.getVisitors()));
-        item.put("firstSeenAt", spec.getFirstSeenAt());
-        item.put("lastSeenAt", spec.getLastSeenAt());
-        item.put("browsers", topEntries(spec.getBrowsers(), 8));
-        item.put("systems", topEntries(spec.getSystems(), 8));
-        item.put("referrers", topEntries(spec.getReferrers(), 8));
+        item.put("postName", name);
+        item.put("title", post != null && post.getSpec() != null
+            ? post.getSpec().getTitle() : spec == null ? null : spec.getTitle());
+        item.put("slug", post != null && post.getSpec() != null
+            ? post.getSpec().getSlug() : spec == null ? null : spec.getSlug());
+        item.put("permalink", post != null && post.getStatus() != null
+            ? post.getStatus().getPermalink() : spec == null ? null : spec.getPermalink());
+        item.put("views", spec == null ? 0L : nvl(spec.getViews()));
+        item.put("officialViews", official);
+        item.put("visitors", visitors);
+        item.put("todayViews", spec == null ? 0L : nvl(spec.getTodayViews()));
+        item.put("todayVisitors", spec == null ? 0L : nvl(spec.getTodayVisitors()));
+        item.put("totalOnlineMs", duration);
+        item.put("avgOnlineMs", visitors == 0 ? 0L : duration / visitors);
+        item.put("tracked", article != null);
+        item.put("firstSeenAt", spec == null ? null : spec.getFirstSeenAt());
+        item.put("lastSeenAt", spec == null ? null : spec.getLastSeenAt());
+        item.put("browsers", spec == null ? List.of() : topEntries(spec.getBrowsers(), 8));
+        item.put("systems", spec == null ? List.of() : topEntries(spec.getSystems(), 8));
+        item.put("referrers", spec == null ? List.of() : topEntries(spec.getReferrers(), 8));
         return item;
     }
 
@@ -207,27 +251,33 @@ public class StatisticsQueryService {
      */
     public Map<String, Object> articleDetail(String postName, OnlineStatsSettings settings,
                                              int limit) {
+        Post post = stats.post(postName);
         ArticleStat article = stats.article(postName);
-        if (article == null) {
+        if (post == null && article == null) {
             return null;
         }
-        ArticleStat.Spec spec = article.getSpec();
-        List<Map<String, Object>> visitors = new ArrayList<>();
-        spec.getVisitorViews().entrySet().stream()
-            .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-            .limit(limit <= 0 ? 100 : limit)
-            .forEach(entry -> {
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("visitorKey", entry.getKey());
-                row.put("views", entry.getValue());
-                row.put("durationMs", spec.getVisitorDurations().getOrDefault(entry.getKey(), 0L));
-                row.put("lastSeenAt", spec.getVisitorLastSeen().get(entry.getKey()));
-                row.put("ip", settings.showIpInConsoleOrDefault()
-                    ? spec.getVisitorIps().get(entry.getKey()) : null);
-                visitors.add(row);
-            });
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("article", articleView(article, settings));
+        result.put("article", articleView(post, article, stats.officialByPost().get(postName),
+            settings));
+
+        List<Map<String, Object>> visitors = new ArrayList<>();
+        if (article != null) {
+            ArticleStat.Spec spec = article.getSpec();
+            spec.getVisitorViews().entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .limit(limit <= 0 ? 100 : limit)
+                .forEach(entry -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("visitorKey", entry.getKey());
+                    row.put("views", entry.getValue());
+                    row.put("durationMs",
+                        spec.getVisitorDurations().getOrDefault(entry.getKey(), 0L));
+                    row.put("lastSeenAt", spec.getVisitorLastSeen().get(entry.getKey()));
+                    row.put("ip", settings.showIpInConsoleOrDefault()
+                        ? spec.getVisitorIps().get(entry.getKey()) : null);
+                    visitors.add(row);
+                });
+        }
         result.put("visitors", visitors);
         return result;
     }
