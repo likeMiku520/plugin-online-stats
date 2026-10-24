@@ -10,7 +10,8 @@ interface Overview {
   officialViews: number
   officialViewsRaw: number
   officialViewsAdjustment: number
-  officialViewsOnTracked: number
+  adjustmentApplied: number
+  adjustmentError: string | null
   todayViews: number
   todayVisitors: number
   online: number
@@ -279,6 +280,15 @@ onUnmounted(() => {
     </header>
 
     <div v-if="emptyHint" class="os-notice">{{ emptyHint }}</div>
+    <div v-if="overview?.adjustmentError" class="os-notice os-notice--error">
+      修正值写入 Halo 官方计数失败：{{ overview.adjustmentError }}
+    </div>
+    <div
+      v-else-if="(overview?.officialViewsAdjustment ?? 0) > 0 && !(overview?.adjustmentApplied ?? 0)"
+      class="os-notice"
+    >
+      修正值 {{ overview?.officialViewsAdjustment }} 正在写入 Halo 官方计数，稍等几秒刷新即可。
+    </div>
 
     <div v-if="overview" class="os-cards">
       <div class="os-card os-card--hero">
@@ -290,10 +300,10 @@ onUnmounted(() => {
         <span class="os-card__label">总浏览量</span>
         <span class="os-card__value">{{ overview.officialViews }}</span>
         <span class="os-card__hint">
-          Halo 官方数据
-          <template v-if="(overview.officialViewsAdjustment ?? 0) > 0">
-            · 含修正 {{ overview.officialViewsAdjustment }}
+          <template v-if="(overview.adjustmentApplied ?? 0) > 0">
+            Halo 官方数据 · 已写入修正 {{ overview.adjustmentApplied }}
           </template>
+          <template v-else>Halo 官方数据</template>
         </span>
       </div>
       <div class="os-card">
@@ -394,38 +404,40 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <table class="os-table">
-        <thead>
-          <tr>
-            <th>文章</th>
-            <th class="os-right">浏览量</th>
-            <th class="os-right">访客数</th>
-            <th class="os-right">今日浏览</th>
-            <th class="os-right">平均停留</th>
-            <th class="os-right">明细</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="item in articles" :key="item.postName">
-            <td>
-              <div class="os-article__title">{{ item.title || item.slug || item.postName }}</div>
-              <div class="os-article__slug">{{ item.permalink || item.slug }}</div>
-            </td>
-            <td class="os-right os-strong">{{ item.officialViews }}</td>
-            <td class="os-right">{{ item.tracked ? item.visitors : '—' }}</td>
-            <td class="os-right">{{ item.tracked ? item.todayViews : '—' }}</td>
-            <td class="os-right">{{ item.tracked ? fmtDuration(item.avgOnlineMs) : '—' }}</td>
-            <td class="os-right">
-              <button class="os-btn os-btn--tiny" type="button" @click="openArticle(item.postName, item.title)">
-                详情
-              </button>
-            </td>
-          </tr>
-          <tr v-if="!articles.length">
-            <td colspan="7" class="os-empty">暂无文章访问记录</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="os-table-wrap">
+        <table class="os-table">
+          <thead>
+            <tr>
+              <th class="os-col-title">文章</th>
+              <th class="os-right">浏览量</th>
+              <th class="os-right">访客数</th>
+              <th class="os-right">今日浏览</th>
+              <th class="os-right">平均停留</th>
+              <th class="os-right">明细</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in articles" :key="item.postName">
+              <td class="os-col-title">
+                <div class="os-article__title">{{ item.title || item.slug || item.postName }}</div>
+                <div class="os-article__slug">{{ item.permalink || item.slug }}</div>
+              </td>
+              <td class="os-right os-strong">{{ item.officialViews }}</td>
+              <td class="os-right">{{ item.tracked ? item.visitors : '—' }}</td>
+              <td class="os-right">{{ item.tracked ? item.todayViews : '—' }}</td>
+              <td class="os-right">{{ item.tracked ? fmtDuration(item.avgOnlineMs) : '—' }}</td>
+              <td class="os-right">
+                <button class="os-btn os-btn--tiny" type="button" @click="openArticle(item.postName, item.title)">
+                  详情
+                </button>
+              </td>
+            </tr>
+            <tr v-if="!articles.length">
+              <td colspan="6" class="os-empty">暂无文章访问记录</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <div v-if="drill.open" class="os-drawer-mask" @click.self="closeDrill">
@@ -499,6 +511,12 @@ onUnmounted(() => {
   background: #fffbeb;
   border: 1px solid #fde68a;
   border-radius: 0.5rem;
+
+  &--error {
+    color: #b91c1c;
+    background: #fef2f2;
+    border-color: #fecaca;
+  }
 }
 
 .os-cards {
@@ -704,8 +722,14 @@ onUnmounted(() => {
   }
 }
 
+.os-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
 .os-table {
   width: 100%;
+  min-width: 40rem;
   border-collapse: collapse;
   font-size: 0.8125rem;
 
@@ -720,11 +744,42 @@ onUnmounted(() => {
     font-weight: 600;
     color: #4b5563;
     background: #f9fafb;
+    white-space: nowrap;
+  }
+
+  /* Numeric columns shrink to their content and never wrap, so the values and the
+     action button stay readable instead of collapsing into each other. */
+  th:not(.os-col-title),
+  td:not(.os-col-title) {
+    width: 1%;
+    white-space: nowrap;
+  }
+
+  &__right {
+    text-align: right;
   }
 }
 
-.os-right {
-  text-align: right;
+.os-col-title {
+  width: auto;
+  max-width: 24rem;
+}
+
+.os-article__title {
+  font-weight: 500;
+  color: #111827;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.os-article__slug {
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: #9ca3af;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .os-muted {
@@ -734,17 +789,6 @@ onUnmounted(() => {
 .os-strong {
   font-weight: 600;
   color: #0f172a;
-}
-
-.os-article__title {
-  font-weight: 500;
-  color: #111827;
-}
-
-.os-article__slug {
-  margin-top: 0.125rem;
-  font-size: 0.6875rem;
-  color: #9ca3af;
 }
 
 .os-empty {

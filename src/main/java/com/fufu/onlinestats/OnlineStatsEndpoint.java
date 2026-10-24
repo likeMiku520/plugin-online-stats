@@ -545,8 +545,12 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     private Mono<ServerResponse> getOverview(ServerRequest request) {
-        return fetchSettings().flatMap(settings -> ServerResponse.ok().bodyValue(
-            queryService.overview(settings, registry.count(settings.onlineTimeoutMillis()))));
+        return fetchSettings().flatMap(settings -> {
+            // Applies a changed correction right away instead of waiting for the timer.
+            statsService.ensureAdjustment(settings.officialViewsAdjustmentOrDefault());
+            return ServerResponse.ok().bodyValue(
+                queryService.overview(settings, registry.count(settings.onlineTimeoutMillis())));
+        });
     }
 
     private Mono<ServerResponse> getTrend(ServerRequest request) {

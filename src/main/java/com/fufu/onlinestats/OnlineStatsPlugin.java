@@ -20,17 +20,20 @@ public class OnlineStatsPlugin extends BasePlugin {
     private final VisitorRecordService recordService;
     private final StatsAggregationService statsService;
     private final SchemeManager schemeManager;
+    private final run.halo.app.plugin.ReactiveSettingFetcher settingFetcher;
     private ScheduledExecutorService scheduler;
 
     public OnlineStatsPlugin(PluginContext pluginContext, OnlineVisitorRegistry registry,
                              VisitorRecordService recordService,
                              StatsAggregationService statsService,
-                             SchemeManager schemeManager) {
+                             SchemeManager schemeManager,
+                             run.halo.app.plugin.ReactiveSettingFetcher settingFetcher) {
         super(pluginContext);
         this.registry = registry;
         this.recordService = recordService;
         this.statsService = statsService;
         this.schemeManager = schemeManager;
+        this.settingFetcher = settingFetcher;
     }
 
     @Override
@@ -48,6 +51,11 @@ public class OnlineStatsPlugin extends BasePlugin {
         scheduler.scheduleWithFixedDelay(() -> {
             try {
                 statsService.refreshOfficialCounts();
+                settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
+                    .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null,
+                        null, null, null))
+                    .subscribe(settings -> statsService
+                        .ensureAdjustment(settings.officialViewsAdjustmentOrDefault()));
             } catch (Exception ignored) {
                 // a failed refresh must never kill the scheduler
             }

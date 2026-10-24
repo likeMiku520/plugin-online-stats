@@ -48,10 +48,11 @@ public class StatisticsQueryService {
             todayViews += nvl(spec.getTodayViews());
             todayVisitors += nvl(spec.getTodayVisitors());
         }
-        // The headline view number is Halo's own total (every counter, exactly like
-// siteStatsFinder), optionally corrected for history that predates this blog.
+        // The headline view number is Halo's own total. A configured correction is written
+        // into Halo's counter data by the aggregation service, so it is not added again
+        // here; these fields only report what was applied.
         long adjustment = settings.officialViewsAdjustmentOrDefault();
-        long officialTotal = stats.officialViewsTotal() + adjustment;
+        long officialTotal = stats.officialViewsTotal();
 
         long totalVisitors = uniqueVisitors(days);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -59,9 +60,10 @@ public class StatisticsQueryService {
         result.put("visitors", visitors);
         result.put("uniqueVisitors", totalVisitors);
         result.put("officialViews", officialTotal);
-        result.put("officialViewsRaw", stats.officialViewsTotal());
+        result.put("officialViewsRaw", officialTotal - stats.appliedAdjustment());
         result.put("officialViewsAdjustment", adjustment);
-        result.put("officialViewsOnTracked", officialViews);
+        result.put("adjustmentApplied", stats.appliedAdjustment());
+        result.put("adjustmentError", stats.adjustmentError());
         result.put("totalOnlineMs", duration);
         result.put("todayViews", todayViews);
         result.put("todayVisitors", todayVisitors);

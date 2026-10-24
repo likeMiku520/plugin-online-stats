@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import run.halo.app.core.extension.Counter;
 import run.halo.app.core.extension.content.Post;
@@ -39,6 +40,10 @@ public class StatsAggregationService {
     private static final long MAX_DURATION_GAP_MS = 5L * 60 * 1000;
     private static final String COUNTER_PREFIX = "posts.content.halo.run/";
 
+    /** Counter that carries the manual correction; it matches no real post. */
+    private static final String ADJUSTMENT_COUNTER =
+        COUNTER_PREFIX + "online-stats-adjustment";
+
     private final ReactiveExtensionClient client;
 
     private final Map<String, ArticleStat> articleIndex = new ConcurrentHashMap<>();
@@ -58,6 +63,8 @@ public class StatsAggregationService {
     private volatile String lastHeartbeatUrl;
     private volatile long officialViewsTotal;
     private volatile int counterCountTotal;
+    private volatile long appliedAdjustment = -1L;
+    private volatile String adjustmentError;
     private final Map<String, Long> officialByPost = new ConcurrentHashMap<>();
 
     public StatsAggregationService(ReactiveExtensionClient client) {
@@ -176,6 +183,59 @@ public class StatsAggregationService {
     /** Official visit count per post name, whether or not this plugin saw the visit. */
     public Map<String, Long> officialByPost() {
         return officialByPost;
+    }
+
+    public long appliedAdjustment() {
+        return appliedAdjustment < 0 ? 0L : appliedAdjustment;
+    }
+
+    public String adjustmentError() {
+        return adjustmentError;
+    }
+
+    /**
+     * Writes the configured correction straight into Halo's counter data, so the
+     * console dashboard and the theme both see the adjusted total. The value lives in a
+     * dedicated counter that belongs to no post, which keeps real articles honest while
+     * still being summed by Halo's own site statistics.
+     */
+    public void ensureAdjustment(long adjustment) {
+        if (adjustment == appliedAdjustment) {
+            return;
+        }
+        appliedAdjustment = adjustment;
+        client.fetch(Counter.class, ADJUSTMENT_COUNTER)
+            .flatMap(counter -> {
+                if (adjustment <= 0) {
+                    return client.delete(counter).then();
+                }
+                counter.setVisit(toVisit(adjustment));
+                return client.update(counter).then();
+            })
+            .switchIfEmpty(Mono.defer(() -> {
+                if (adjustment <= 0) {
+                    return Mono.empty();
+                }
+                Counter counter = Counter.emptyCounter(ADJUSTMENT_COUNTER);
+                counter.setVisit(toVisit(adjustment));
+                return client.create(counter).then();
+            }))
+            .subscribeOn(Schedulers.boundedElastic())
+            .subscribe(unused -> {
+                adjustmentError = null;
+                log.debug("Applied official view adjustment {}", adjustment);
+                refreshOfficialCounts();
+            }, error -> {
+                adjustmentError = error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage();
+                // Allow another attempt on the next cycle instead of giving up.
+                appliedAdjustment = -1;
+                log.warn("Failed to apply official view adjustment: {}", error.toString());
+            });
+    }
+
+    private static int toVisit(long value) {
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) value;
     }
 
     /**

@@ -29,7 +29,7 @@ spec:
         - $formkit: number
           name: officialViewsAdjustment
           label: 官方总浏览量修正值
-          help: 加到 Halo 官方总浏览量上的数字。比如换过博客或迁移过数据，官方计数从 0 开始，把旧站的历史浏览量填在这里即可对上总数。留空或填 0 表示不修正。
+          help: 直接写入 Halo 的官方计数数据，所以后台仪表盘和主题前台都会同步增加。用于换博客、迁移数据后把旧站的历史浏览量补回来：填一个整数表示在官方总数上补这么多，填 0 或留空表示不修正（会把之前写入的修正清除）。
           value: 0
         - $formkit: checkbox
           name: showIpInConsole
