@@ -29,6 +29,7 @@ import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
 import org.springframework.web.reactive.function.server.ServerResponse;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 import run.halo.app.core.extension.endpoint.CustomEndpoint;
 import run.halo.app.extension.GroupVersion;
 import run.halo.app.plugin.ReactiveSettingFetcher;
@@ -141,11 +142,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 long now = System.currentTimeMillis();
                 OnlineVisitor visitor = registry.heartbeat(ip, userAgent, toHeartbeat(body),
                     now, settings.onlineTimeoutMillis());
-                try {
-                    statsService.record(visitor, settings, now);
-                } catch (Exception e) {
-                    log.debug("Failed to aggregate heartbeat: {}", e.toString());
-                }
+                statsService.recordAsync(visitor, settings, now);
                 return ServerResponse.ok().bodyValue(Map.of("ok", true));
             }));
     }
@@ -349,16 +346,19 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 return ServerResponse.badRequest().bodyValue(Map.of("error", "missing ip"));
             }
             final String targetIp = ip;
-            return ipGeoService.lookup(targetIp).flatMap(location -> {
-                if (!recordName.isBlank() && location.resolved()) {
-                    if (recordService.get(recordName) == null) {
-                        recordService.flushVisitor(recordName);
+            return ipGeoService.lookup(targetIp)
+                .flatMap(location -> Mono.fromCallable(() -> {
+                    // Persisting blocks, and this continuation can run on a Netty event
+                    // loop thread, so the write is moved to a worker thread.
+                    if (!recordName.isBlank() && location.resolved()) {
+                        if (recordService.get(recordName) == null) {
+                            recordService.flushVisitor(recordName);
+                        }
+                        recordService.applyLocation(recordName, location);
                     }
-                    recordService.applyLocation(recordName, location);
-                }
-                return ServerResponse.ok()
-                    .bodyValue(toLocationView(targetIp, location, usedEndpoint));
-            });
+                    return toLocationView(targetIp, location, usedEndpoint);
+                }).subscribeOn(Schedulers.boundedElastic()))
+                .flatMap(view -> ServerResponse.ok().bodyValue(view));
         });
     }
 

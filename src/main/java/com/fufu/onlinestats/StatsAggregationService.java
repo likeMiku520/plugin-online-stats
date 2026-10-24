@@ -67,6 +67,16 @@ public class StatsAggregationService {
     private volatile String adjustmentError;
     private final Map<String, Long> officialByPost = new ConcurrentHashMap<>();
 
+    private final java.util.concurrent.ExecutorService recordExecutor =
+        java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "online-stats-aggregate");
+            thread.setDaemon(true);
+            return thread;
+        });
+    private final java.util.concurrent.atomic.AtomicInteger pendingRecords =
+        new java.util.concurrent.atomic.AtomicInteger();
+    private static final int MAX_PENDING_RECORDS = 5000;
+
     public StatsAggregationService(ReactiveExtensionClient client) {
         this.client = client;
     }
@@ -313,6 +323,34 @@ public class StatsAggregationService {
             log.debug("Loaded {} published posts", refreshed.size());
         } catch (Exception e) {
             log.debug("Failed to reload posts: {}", e.toString());
+        }
+    }
+
+    /**
+     * Queues a heartbeat for aggregation. Writing to the extension store blocks, and the
+     * caller is a Netty event loop thread where blocking is forbidden, so the work is
+     * handed to a single background thread. One thread also keeps heartbeats in order,
+     * which matters for counting a page entry exactly once.
+     */
+    public void recordAsync(OnlineVisitor visitor, OnlineStatsSettings settings, long now) {
+        if (pendingRecords.get() >= MAX_PENDING_RECORDS) {
+            log.debug("Dropping heartbeat aggregation, queue is full");
+            return;
+        }
+        pendingRecords.incrementAndGet();
+        try {
+            recordExecutor.execute(() -> {
+                try {
+                    record(visitor, settings, now);
+                } catch (Exception e) {
+                    log.debug("Failed to aggregate heartbeat: {}", e.toString());
+                } finally {
+                    pendingRecords.decrementAndGet();
+                }
+            });
+        } catch (Exception e) {
+            pendingRecords.decrementAndGet();
+            log.debug("Failed to queue heartbeat aggregation: {}", e.toString());
         }
     }
 
@@ -605,7 +643,16 @@ public class StatsAggregationService {
         postIndex.clear();
         lastCountedPage.clear();
         lastHeartbeatAt.clear();
+        officialByPost.clear();
+        appliedAdjustment = -1L;
+        adjustmentError = null;
         loaded = false;
+    }
+
+    /** Releases the aggregation thread when the plugin stops. */
+    public void shutdown() {
+        recordExecutor.shutdownNow();
+        clear();
     }
 
     private static long nvl(Long value) {

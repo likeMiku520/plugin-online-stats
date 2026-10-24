@@ -70,6 +70,7 @@ public class OnlineStatsPlugin extends BasePlugin {
         }
         recordService.stop();
         registry.clear();
+        statsService.shutdown();
         schemeManager.unregister(Scheme.buildFromType(VisitorRecord.class));
         schemeManager.unregister(Scheme.buildFromType(ArticleStat.class));
         schemeManager.unregister(Scheme.buildFromType(DailyStat.class));
