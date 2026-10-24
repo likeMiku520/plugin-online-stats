@@ -8,14 +8,17 @@ interface Overview {
   visitors: number
   uniqueVisitors: number
   officialViews: number
+  officialViewsOnTracked: number
   totalOnlineMs: number
   todayViews: number
   todayVisitors: number
   online: number
   articles: number
-  launchedays?: number
   onlineSince: string | null
   loaded: boolean
+  posts: number
+  unresolvedHeartbeats: number
+  lastHeartbeatUrl: string | null
 }
 
 interface SourceItem {
@@ -43,7 +46,7 @@ const api = '/apis/online-stats.halo.run/v1alpha1'
 
 const overview = ref<Overview | null>(null)
 const series = ref<Point[]>([])
-const daily7 = ref<Point[]>([])
+const trendLoaded = ref(false)
 const articles = ref<ArticleRow[]>([])
 const browsers = ref<SourceItem[]>([])
 const systems = ref<SourceItem[]>([])
@@ -76,7 +79,7 @@ async function loadAll() {
     ])
     overview.value = ov.data
     series.value = tr.data.series || []
-    daily7.value = tr.data.daily7 || []
+    trendLoaded.value = true
     articles.value = ar.data.items || []
     browsers.value = br.data.items || []
     systems.value = sy.data.items || []
@@ -190,6 +193,26 @@ function closeDrill() {
 }
 
 const topArticles = computed(() => articles.value.slice(0, 10))
+
+/** Explains an empty dashboard instead of leaving the user guessing. */
+const emptyHint = computed(() => {
+  const ov = overview.value
+  if (!ov || ov.views > 0) {
+    return ''
+  }
+  if (!ov.loaded) {
+    return '插件正在加载数据，稍等几秒。'
+  }
+  if (ov.posts === 0) {
+    return '没有读取到已发布的文章，插件无法把访问归到具体文章上。请确认博客里至少有已发布的文章，然后刷新。'
+  }
+  if ((ov.unresolvedHeartbeats ?? 0) > 0 && ov.articles === 0) {
+    return `已收到 ${ov.unresolvedHeartbeats} 次心跳，但都没有匹配到文章。最近一次上报的地址是 ${
+      ov.lastHeartbeatUrl || '未知'
+    }。统计只记录文章详情页，首页和归档页不计入；如果这是文章页，说明文章链接与插件记录的对不上。`
+  }
+  return '还没有文章页的访问记录。打开任意一篇文章停留十几秒，再回来看这里。'
+})
 const maxSourceViews = computed(() =>
   Math.max(1, ...browsers.value.map((s) => s.views), ...systems.value.map((s) => s.views)),
 )
@@ -239,6 +262,8 @@ onUnmounted(() => {
       <button class="os-btn os-btn--ghost" type="button" @click="loadAll">刷新</button>
     </header>
 
+    <div v-if="emptyHint" class="os-notice">{{ emptyHint }}</div>
+
     <div v-if="overview" class="os-cards">
       <div class="os-card os-card--hero">
         <span class="os-card__label">当前在线</span>
@@ -248,7 +273,9 @@ onUnmounted(() => {
       <div class="os-card">
         <span class="os-card__label">总浏览量</span>
         <span class="os-card__value">{{ overview.views }}</span>
-        <span class="os-card__hint">Halo 官方计数 {{ overview.officialViews }}</span>
+        <span class="os-card__hint">
+          Halo 官方计数 {{ overview.officialViews }}
+        </span>
       </div>
       <div class="os-card">
         <span class="os-card__label">总访客</span>
@@ -292,16 +319,6 @@ onUnmounted(() => {
         </div>
       </div>
       <StatsChart :series="series" metric="views" />
-      <div class="os-mini">
-        <div>
-          <h4>近 7 天</h4>
-          <StatsChart :series="daily7" metric="views" :height="140" />
-        </div>
-        <div>
-          <h4>近 30 天</h4>
-          <StatsChart :series="series.slice(-30)" metric="visitors" :height="140" />
-        </div>
-      </div>
     </section>
 
     <div class="os-grid">
@@ -447,6 +464,17 @@ onUnmounted(() => {
       color: #6b7280;
     }
   }
+}
+
+.os-notice {
+  padding: 0.625rem 0.875rem;
+  margin-bottom: 1rem;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 0.5rem;
 }
 
 .os-cards {

@@ -27,8 +27,8 @@
     return String(value);
   }
 
-  /* Halo themes expose the post name through a meta tag or a body class depending on
-   * the theme, so try the common places before giving up. */
+  /* The server writes the post name into a meta tag on article pages. Themes that strip
+   it can still be matched by URL on the server, so the tag is optional. */
   function postName() {
     var meta = document.querySelector('meta[name="halo-post-name"]');
     if (meta && meta.content) {

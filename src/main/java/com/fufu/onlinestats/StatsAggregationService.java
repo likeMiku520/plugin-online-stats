@@ -37,6 +37,7 @@ public class StatsAggregationService {
     private static final int MAX_VISITOR_KEYS = 5000;
     private static final int MAX_MAP_ENTRIES = 400;
     private static final long MAX_DURATION_GAP_MS = 5L * 60 * 1000;
+    private static final String COUNTER_PREFIX = "posts.content.halo.run/";
 
     private final ReactiveExtensionClient client;
 
@@ -51,6 +52,11 @@ public class StatsAggregationService {
     private final Map<String, Long> lastHeartbeatAt = new ConcurrentHashMap<>();
 
     private volatile boolean loaded;
+    private volatile long lastPostLoadAt;
+    private volatile int postLoadCount;
+    private volatile int unresolvedHeartbeats;
+    private volatile String lastHeartbeatUrl;
+    private volatile long officialViewsTotal;
 
     public StatsAggregationService(ReactiveExtensionClient client) {
         this.client = client;
@@ -121,38 +127,79 @@ public class StatsAggregationService {
         return metadata == null ? null : metadata.getName();
     }
 
-    /** Refreshes the official view counts from Halo's own counter resources. */
+    /**
+     * Refreshes the official view counts from Halo's own counter resources. Halo names
+     * counters "posts.content.halo.run/{postName}", so the post name is the suffix.
+     */
     public void refreshOfficialCounts() {
+        long[] total = {0L};
         listAll(Counter.class).subscribe(counter -> {
-            String name = nameOf(counter.getMetadata());
-            if (name == null) {
-                return;
-            }
-            ArticleStat stat = articleIndex.get(name);
-            if (stat == null) {
+            String raw = nameOf(counter.getMetadata());
+            if (raw == null) {
                 return;
             }
             Integer visit = counter.getVisit();
-            if (visit != null && !Long.valueOf(visit).equals(stat.getSpec().getOfficialViews())) {
-                stat.getSpec().setOfficialViews((long) visit);
-                saveArticle(stat);
+            if (visit != null && raw.startsWith(COUNTER_PREFIX)) {
+                total[0] += visit;
             }
-        }, error -> log.debug("Failed to read official counters: {}", error.toString()));
+            String postName = raw.startsWith(COUNTER_PREFIX)
+                ? raw.substring(COUNTER_PREFIX.length()) : raw;
+            ArticleStat stat = articleIndex.get(postName);
+            if (stat == null) {
+                return;
+            }
+            if (visit == null || Long.valueOf(visit).equals(stat.getSpec().getOfficialViews())) {
+                return;
+            }
+            stat.getSpec().setOfficialViews((long) visit);
+            saveArticle(stat);
+        }, error -> log.debug("Failed to read official counters: {}", error.toString()),
+            () -> officialViewsTotal = total[0]);
     }
 
-    /** Resolves the post for a heartbeat, either by reported name or by permalink. */
+    /** Sum of every Halo counter, including posts this plugin has never observed. */
+    public long officialViewsTotal() {
+        return officialViewsTotal;
+    }
+
+    /**
+     * Resolves the post for a heartbeat. Prefers the reported name, then falls back to
+     * matching the permalink so a theme without the meta tag still gets attributed.
+     */
     public Post resolvePost(String postName, String pageUrl) {
         if (postName != null && !postName.isBlank()) {
-            return postIndex.get(postName);
+            Post post = postIndex.get(postName);
+            if (post != null) {
+                return post;
+            }
+            // The post may have been published after this plugin loaded its index.
+            reloadPosts();
+            post = postIndex.get(postName);
+            if (post != null) {
+                return post;
+            }
         }
         if (pageUrl == null || pageUrl.isBlank()) {
             return null;
         }
         String path = pageUrl.split("\\?")[0];
+        Post matched = matchByPath(path);
+        if (matched != null) {
+            return matched;
+        }
+        reloadPosts();
+        return matchByPath(path);
+    }
+
+    private Post matchByPath(String path) {
         for (Post post : postIndex.values()) {
             String permalink = post.getStatus() == null ? null : post.getStatus().getPermalink();
-            if (permalink != null && !permalink.isBlank() && path.equals(permalink)) {
-                return post;
+            if (permalink != null && !permalink.isBlank()) {
+                String normalized = permalink.endsWith("/") && permalink.length() > 1
+                    ? permalink.substring(0, permalink.length() - 1) : permalink;
+                if (path.equals(normalized)) {
+                    return post;
+                }
             }
             String slug = post.getSpec() == null ? null : post.getSpec().getSlug();
             if (slug != null && !slug.isBlank()
@@ -163,13 +210,45 @@ public class StatsAggregationService {
         return null;
     }
 
+    /** Re-reads the published posts, at most once every half minute. */
+    public synchronized void reloadPosts() {
+        long now = System.currentTimeMillis();
+        if (now - lastPostLoadAt < 30_000L) {
+            return;
+        }
+        lastPostLoadAt = now;
+        try {
+            List<Post> posts = client.listAll(Post.class, ListOptions.builder().build(),
+                    Sort.unsorted()).collectList().block(Duration.ofSeconds(20));
+            if (posts == null) {
+                return;
+            }
+            Map<String, Post> refreshed = new ConcurrentHashMap<>();
+            for (Post post : posts) {
+                String name = nameOf(post.getMetadata());
+                if (name != null && Boolean.TRUE.equals(post.getSpec().getPublish())
+                    && !Boolean.TRUE.equals(post.getSpec().getDeleted())) {
+                    refreshed.put(name, post);
+                }
+            }
+            postIndex.clear();
+            postIndex.putAll(refreshed);
+            postLoadCount++;
+            log.debug("Loaded {} published posts", refreshed.size());
+        } catch (Exception e) {
+            log.debug("Failed to reload posts: {}", e.toString());
+        }
+    }
+
     /**
      * Applies one heartbeat for one visitor. Heartbeats that cannot be tied to a post
      * are ignored, so only article pages are counted.
      */
     public void record(OnlineVisitor visitor, OnlineStatsSettings settings, long now) {
+        lastHeartbeatUrl = visitor.getPageUrl();
         Post post = resolvePost(visitor.getPostName(), visitor.getPageUrl());
         if (post == null) {
+            unresolvedHeartbeats++;
             return;
         }
         String postName = post.getMetadata().getName();
@@ -455,5 +534,21 @@ public class StatsAggregationService {
 
     private static long nvl(Long value) {
         return value == null ? 0L : value;
+    }
+
+    /**
+     * State of the aggregation pipeline, surfaced in the console so an empty dashboard
+     * can be explained without reading server logs.
+     */
+    public Map<String, Object> diagnostics() {
+        Map<String, Object> info = new java.util.LinkedHashMap<>();
+        info.put("loaded", loaded);
+        info.put("posts", postIndex.size());
+        info.put("postLoads", postLoadCount);
+        info.put("articles", articleIndex.size());
+        info.put("days", dailyIndex.size());
+        info.put("unresolvedHeartbeats", unresolvedHeartbeats);
+        info.put("lastHeartbeatUrl", lastHeartbeatUrl);
+        return info;
     }
 }

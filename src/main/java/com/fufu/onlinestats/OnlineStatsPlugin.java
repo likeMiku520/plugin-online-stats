@@ -51,7 +51,7 @@ public class OnlineStatsPlugin extends BasePlugin {
             } catch (Exception ignored) {
                 // a failed refresh must never kill the scheduler
             }
-        }, 60, 600, TimeUnit.SECONDS);
+        }, 20, 600, TimeUnit.SECONDS);
     }
 
     @Override

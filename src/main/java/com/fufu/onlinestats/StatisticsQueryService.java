@@ -47,13 +47,17 @@ public class StatisticsQueryService {
             todayViews += nvl(spec.getTodayViews());
             todayVisitors += nvl(spec.getTodayVisitors());
         }
+        // Articles that were never visited by this plugin still have official counts, so the
+        // aggregation service reports the full official total separately.
+        long officialTotal = stats.officialViewsTotal();
 
         long totalVisitors = uniqueVisitors(days);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("views", views);
         result.put("visitors", visitors);
         result.put("uniqueVisitors", totalVisitors);
-        result.put("officialViews", officialViews);
+        result.put("officialViews", officialTotal);
+        result.put("officialViewsOnTracked", officialViews);
         result.put("totalOnlineMs", duration);
         result.put("todayViews", todayViews);
         result.put("todayVisitors", todayVisitors);
@@ -63,6 +67,7 @@ public class StatisticsQueryService {
         result.put("today", today);
         result.put("onlineSince", onlineSince(settings, days));
         result.put("loaded", stats.isLoaded());
+        result.putAll(stats.diagnostics());
         return result;
     }
 
