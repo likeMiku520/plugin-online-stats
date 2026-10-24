@@ -1,0 +1,47 @@
+apiVersion: v1alpha1
+kind: Setting
+metadata:
+  name: online-stats-settings
+spec:
+  forms:
+    - group: basic
+      label: 基本设置
+      formSchema:
+        - $formkit: number
+          name: heartbeatInterval
+          label: 心跳间隔（秒）
+          help: 前台页面上报心跳的频率，越小越实时、请求越多。
+          value: 15
+          min: 5
+          max: 120
+        - $formkit: number
+          name: onlineTimeout
+          label: 在线判定超时（秒）
+          help: 超过该时长没有心跳的访客会被判定为离线。
+          value: 60
+          min: 20
+          max: 600
+        - $formkit: checkbox
+          name: showIpInConsole
+          label: 后台显示访客 IP 地址
+          help: 关闭后后台不再展示访客 IP，保护访客隐私。
+          value: true
+        - $formkit: text
+          name: geoEndpoint
+          label: IP 属地查询接口
+          help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在访客详情里点击「查询属地」时才会请求。
+          value: "https://api.mir6.com/api/ip?ip=%s&type=json"
+        - $formkit: number
+          name: historyRetentionDays
+          label: 历史记录保留天数
+          help: 超过该天数的访客记录会被自动清理。
+          value: 90
+          min: 1
+          max: 3650
+        - $formkit: number
+          name: maxRecords
+          label: 历史记录最大条数
+          help: 超过上限时优先删除最久未活跃的记录。
+          value: 5000
+          min: 100
+          max: 100000

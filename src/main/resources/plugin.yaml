@@ -1,0 +1,24 @@
+# Refer https://docs.halo.run/developer-guide/plugin/basics/manifest
+
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  # The name defines how the plugin is invoked, A unique name
+  name: online-stats
+spec:
+  enabled: true
+  requires: ">=2.25.0"
+  author:
+    name: fufu大王
+    website: https://blog.fufu520.cn
+  logo: logo.webp
+  homepage: https://blog.fufu520.cn
+  repo: https://github.com/likeMiku520/plugin-online-stats
+  issues: https://github.com/likeMiku520/plugin-online-stats/issues
+  displayName: "在线访客统计"
+  description: "实时统计在线访客人数，保存访客历史记录，并在后台查看访客属地、设备与访问详情。"
+  settingName: online-stats-settings
+  configMapName: online-stats-configmap
+  license:
+    - name: "GPL-3.0"
+      url: "https://www.gnu.org/licenses/gpl-3.0.html"

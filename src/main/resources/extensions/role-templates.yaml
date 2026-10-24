@@ -1,0 +1,25 @@
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: role-template-online-stats-anonymous
+  labels:
+    halo.run/role-template: "true"
+    halo.run/hidden: "true"
+    rbac.authorization.halo.run/aggregate-to-anonymous: "true"
+rules:
+  - apiGroups: ["online-stats.halo.run"]
+    resources: ["heartbeat", "online-count", "online-pages", "online-stats"]
+    verbs: ["get", "list", "create"]
+---
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: role-template-online-stats-view
+  labels:
+    halo.run/role-template: "true"
+    halo.run/hidden: "true"
+    rbac.authorization.halo.run/aggregate-to-super-role: "true"
+rules:
+  - apiGroups: ["online-stats.halo.run"]
+    resources: ["visitors", "records", "location"]
+    verbs: ["get", "list"]
