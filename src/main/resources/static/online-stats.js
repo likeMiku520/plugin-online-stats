@@ -281,13 +281,13 @@
       'color:#fff;cursor:pointer;background:var(--primary,#39C5BB);border:0;border-radius:.5rem}',
       '.oschat-send:disabled{cursor:not-allowed;opacity:.55}',
       '.oschat-note{display:none;padding:0 1rem .625rem;font-size:.6875rem;color:#dc2626}',
-      /* Same surface as the theme's own floating buttons: a translucent card with a
-       * blurred backdrop, a primary coloured mark inside and a soft drop shadow. The
-       * geometry lives inline on the element so a missing stylesheet cannot blow it up. */
+      /* Same shape as the theme's own floating buttons, but on a solid card surface
+       * rather than a translucent one: the solid colour is legible over any banner.
+       * The geometry lives inline on the element so a missing stylesheet cannot blow
+       * it up. */
       '.oschat-launcher{box-sizing:border-box;cursor:pointer;color:var(--primary,#39C5BB);',
-      'background-color:#ffffff9e;',
-      '-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);',
-      'box-shadow:0 4px 16px -4px #0000004d;transition:transform .2s ease,background-color .2s ease}',
+      'background-color:var(--card-bg,#fff);',
+      'box-shadow:0 4px 16px -4px #0000004d;transition:transform .2s ease}',
       '.oschat-launcher:active{transform:scale(.9)}',
       '.oschat-launcher svg{display:block;width:1.75rem;height:1.75rem}',
       '.oschat-badge{position:absolute;top:-.25rem;right:-.25rem;min-width:1.125rem;',
@@ -302,14 +302,14 @@
       'to{opacity:1;transform:none}}',
       /* The blog toggles dark mode with a class on :root, so both signals are honoured. */
       ':root.dark .oschat-card{background:var(--card-bg,#1e293b);color:#e2e8f0}',
-      ':root.dark .oschat-launcher{background-color:#000000a6}',
+      ':root.dark .oschat-launcher{background-color:var(--card-bg,#1e293b)}',
       ':root.dark .oschat-bubble{background:rgba(255,255,255,.08)}',
       ':root.dark .oschat-text{color:rgba(255,255,255,.72)}',
       ':root.dark .oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
       'border-color:rgba(255,255,255,.14)}',
       ':root.dark .oschat-foot{border-top-color:rgba(255,255,255,.08)}',
       '@media (prefers-color-scheme:dark){.oschat-card{background:var(--card-bg,#1e293b);',
-      'color:#e2e8f0}.oschat-launcher{background-color:#000000a6}',
+      'color:#e2e8f0}.oschat-launcher{background-color:var(--card-bg,#1e293b)}',
       '.oschat-bubble{background:rgba(255,255,255,.08)}.oschat-text{color:rgba(255,255,255,.72)}',
       '.oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
       'border-color:rgba(255,255,255,.14)}.oschat-foot{border-top-color:rgba(255,255,255,.08)}}'
@@ -489,16 +489,16 @@
    * stylesheet, which a theme page swap can remove at any moment. */
   var LAUNCHER_SIZE = '3.5rem';
   var NAVBAR_GAP = 20;
-  var EDGE_GAP = 16;
+  /* .floating-controls is fixed at right:.75rem, so the same offset keeps this button
+   * in the column of the theme's own floating buttons. */
+  var FLOATING_COLUMN_RIGHT = 12;
 
-  /* material-symbols:chat-outline-rounded, the same rounded outline set the theme
-   * uses for its own floating buttons. */
+  /* iconify uil:message, sized like the theme's own floating button icons. */
   var CHAT_ICON_PATH =
-    'm6 18l-2.3 2.3q-.475.475-1.088.213T2 19.575V4q0-.825.588-1.412T4 2h16q.825 0 ' +
-    '1.413.588T22 4v12q0 .825-.587 1.413T20 18zm-.85-2H20V4H4v13.125zM4 16V4zm3-2h6q.425 ' +
-    '0 .713-.288T14 13t-.288-.712T13 12H7q-.425 0-.712.288T6 13t.288.713T7 14m0-3h10q.425 ' +
-    '0 .713-.288T18 10t-.288-.712T17 9H7q-.425 0-.712.288T6 10t.288.713T7 11m0-3h10q.425 ' +
-    '0 .713-.288T18 7t-.288-.712T17 6H7q-.425 0-.712.288T6 7t.288.713T7 8';
+    'm20.34 9.32l-14-7a3 3 0 0 0-4.08 3.9l2.4 5.37a1.06 1.06 0 0 1 0 .82l-2.4 5.37A3 3 ' +
+    '0 0 0 5 22a3.14 3.14 0 0 0 1.35-.32l14-7a3 3 0 0 0 0-5.36Zm-.89 3.57l-14 7a1 1 0 0 ' +
+    '1-1.35-1.3l2.39-5.37a2 2 0 0 0 .08-.22h6.89a1 1 0 0 0 0-2H6.57a2 2 0 0 0-.08-.22L4.1 ' +
+    '5.41a1 1 0 0 1 1.35-1.3l14 7a1 1 0 0 1 0 1.78';
 
   function chatIcon() {
     var ns = 'http://www.w3.org/2000/svg';
@@ -531,21 +531,21 @@
     return null;
   }
 
-  /* Top right corner, under the navigation bar and clear of it. */
+  /* Top right corner, under the navigation bar and in the same column as the theme's
+   * floating buttons at the bottom. Measured once so it never drifts while scrolling. */
   function positionLauncher() {
     if (!chatLauncher) {
       return;
     }
+    chatLauncher.style.right = FLOATING_COLUMN_RIGHT + 'px';
+    chatLauncher.style.bottom = 'auto';
+    chatLauncher.style.left = 'auto';
     var rect = navbarRect();
     if (rect && rect.bottom > 8 && rect.bottom < window.innerHeight * 0.6) {
       chatLauncher.style.top = Math.round(rect.bottom + NAVBAR_GAP) + 'px';
-      chatLauncher.style.right = Math.max(12, Math.round(window.innerWidth - rect.right)) + 'px';
     } else {
       chatLauncher.style.top = '5.5rem';
-      chatLauncher.style.right = EDGE_GAP + 'px';
     }
-    chatLauncher.style.bottom = 'auto';
-    chatLauncher.style.left = 'auto';
   }
 
   function remeasureLauncher() {
@@ -586,7 +586,9 @@
       chatLauncher.style.justifyContent = 'center';
       (document.body || document.documentElement).appendChild(chatLauncher);
       window.addEventListener('resize', remeasureLauncher);
-      window.addEventListener('scroll', remeasureLauncher, { passive: true });
+      // Measured once, on purpose: re-measuring on every poll would make the button
+      // drift with the navigation bar while the visitor scrolls.
+      positionLauncher();
     }
     chatLauncher.textContent = '';
     chatLauncher.appendChild(chatIcon());
@@ -594,7 +596,6 @@
       chatLauncher.appendChild(chatElement('span', 'oschat-badge', String(chatUnread)));
     }
     chatLauncher.style.display = 'flex';
-    positionLauncher();
   }
 
   /* Re-attaches the widget if a page swap moved the body out from under it. */
