@@ -62,6 +62,7 @@ function conversations(unread: number) {
       items: unread
         ? [
             {
+              visitorKey: 'v-1',
               ip: '10.0.0.9',
               unread,
               total: 3,
@@ -103,7 +104,7 @@ describe('the visitor list', () => {
     expect(wrapper.find('.os-unread').text()).toContain('10.0.0.9')
   })
 
-  it('marks the row the unread reply belongs to', async () => {
+  it('marks the row the unread reply belongs to, by device rather than by address', async () => {
     const wrapper = mount(OnlineStatsPage)
     await flushPromises()
 

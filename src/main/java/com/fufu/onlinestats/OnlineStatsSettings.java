@@ -12,9 +12,16 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Long officialViewsAdjustment,
                                   String siteHomepage,
                                   Boolean chatEnabled,
-                                  String chatAvatar) {
+                                  String chatAvatar,
+                                  Boolean chatRequireHttps) {
 
     public static final String GROUP = "basic";
+
+    /** Settings object used when the stored configuration cannot be read. */
+    public static OnlineStatsSettings empty() {
+        return new OnlineStatsSettings(null, null, null, null, null, null, null, null,
+            null, null, null);
+    }
 
     /** Avatar every visitor sees on a console message when none is configured. */
     public static final String DEFAULT_CHAT_AVATAR =
@@ -62,6 +69,15 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
         String value = chatAvatar.trim();
         return value.startsWith("https://") || value.startsWith("http://")
             ? value : DEFAULT_CHAT_AVATAR;
+    }
+
+    /**
+     * Refuses the conversation endpoints over a plain connection, so chat text is never
+     * carried in the clear. Sites whose reverse proxy does not report the original
+     * scheme can turn it off.
+     */
+    public boolean chatRequireHttpsOrDefault() {
+        return chatRequireHttps == null || chatRequireHttps;
     }
 
     public String geoEndpointOrDefault() {

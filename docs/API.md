@@ -90,14 +90,18 @@ window.__ONLINE_STATS__ = {
       "direction": "admin",
       "text": "你好，看到你在看这篇博客～",
       "sentAt": 1760000000000,
-      "adminName": "fufu大王",
-      "adminAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp"
+      "authorName": "fufu大王",
+      "authorAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp"
     }
   ]
 }
 ```
 
-`direction` 为 `admin`（后台发出）或 `visitor`（访客回复）。同一地址每分钟超过 60 次返回 `429`。
+`direction` 为 `admin`（后台发出）或 `visitor`（访客回复）。`authorName` / `authorAvatar` 只在后台发出的消息上出现。
+
+会话按**设备指纹**（客户端地址 + User-Agent，与访客明细同一套 key）归属，不由参数决定：同一地址下的另一台设备、或伪造转发头的人，拿到的是另一个 key，读不到这段对话。
+
+非加密连接（既不是 https，也没有 `X-Forwarded-Proto: https`）返回 `403 insecure transport`；可在设置里关闭「仅允许 HTTPS」。同一地址每分钟超过 60 次返回 `429`。
 
 ## 访客回复
 
@@ -115,6 +119,8 @@ window.__ONLINE_STATS__ = {
 { "ok": true, "seq": 13 }
 ```
 
+作者身份不接受请求体传入：如果访客当前已登录 Halo，服务端从会话里读出账号的显示名与头像存下来，后台就会显示这个人；没有登录则记为「访客」。
+
 关闭「允许在后台给访客发消息」后返回 `403`。
 
 ## 对话列表
@@ -128,6 +134,7 @@ window.__ONLINE_STATS__ = {
   "unreadTotal": 2,
   "items": [
     {
+      "visitorKey": "v-0123456789abcdef",
       "ip": "1.2.3.4",
       "unread": 2,
       "total": 5,
@@ -139,19 +146,20 @@ window.__ONLINE_STATS__ = {
 }
 ```
 
-关闭「后台显示访客 IP 地址」时，`ip` 只保留网段（`1.2.3.*`）。
+`visitorKey` 就是访客明细里那条记录的 name，后台按它定位对话；关闭「后台显示访客 IP 地址」时 `ip` 只保留网段（`1.2.3.*`），不影响对话。
 
 ## 单个对话
 
-`GET /chat-messages?ip=<ip>`（管理员）
+`GET /chat-messages?key=<visitorKey>`（管理员）
 
 | 参数 | 默认 | 说明 |
 | --- | --- | --- |
-| ip | 必填 | 对话对应的访客地址 |
+| key | 必填 | 对话所属设备的 visitorKey（记录 name） |
 | markRead | true | 是否把访客的回复标记为已读 |
 
 ```json
 {
+  "visitorKey": "v-0123456789abcdef",
   "ip": "1.2.3.4",
   "enabled": true,
   "avatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
@@ -161,9 +169,8 @@ window.__ONLINE_STATS__ = {
       "direction": "admin",
       "text": "你好",
       "sentAt": 1760000000000,
-      "adminName": "fufu大王",
-      "adminAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
-      "visitorKey": null,
+      "authorName": "fufu大王",
+      "authorAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
       "pageUrl": null,
       "pageTitle": null,
       "readByAdmin": true
@@ -178,7 +185,7 @@ window.__ONLINE_STATS__ = {
 
 | 字段 | 说明 |
 | --- | --- |
-| ip | 目标访客地址，必填 |
+| key | 目标设备的 visitorKey，必填 |
 | text | 消息内容，必填，纯文本，最长 1000 字 |
 
 ```json
@@ -189,7 +196,11 @@ window.__ONLINE_STATS__ = {
 
 访客侧脚本用最新一条后台消息的头像渲染整条对话，所以同一条对话里不会出现两种头像。
 
+后台读到的访客消息会带上 `authorName` / `authorAvatar`：访客当时已登录 Halo 就有值，没登录就是 `null`，界面显示「访客」。
+
 设置里的「即时通讯（后台给访客发消息）」是整个功能的总开关。关掉之后，`/chat-send`、`/chat-reply` 都会返回 `403`，`/chat-inbox` 返回空消息，两个后台读接口的 `enabled` 会变成 `false`。这个功能仅为学习测试使用。
+
+对话记录按设置里的「访客记录保留天数」清理：插件每 5 分钟检查一次，超过天数的消息会从内存和存储里一起删除；单个对话另外最多保留 100 条、最多 200 个对话。访客侧不做任何本地存储，刷新页面后光标从零开始，也不会留下任何痕迹。
 
 ## 权限边界
 
@@ -204,7 +215,16 @@ window.__ONLINE_STATS__ = {
 
 另外：访客回复最多 1000 字、每分钟 60 次，单个对话最多保留 100 条、最多 200 个对话；后台页面用 Vue 插值（转义）渲染消息，前台脚本用文本节点渲染，插件里没有任何 `v-html` / `innerHTML` / `eval`，所以留言内容不会变成可执行的代码，也就没有借 XSS 偷取后台会话的路径。`GET /chat-inbox` 只返回正文、方向、时间和管理员对外显示的名字与头像，不含其它访客的 IP、设备指纹或访问记录。
 
-一个平台层面的说明：如果站点前面有反向代理，Halo 以 `server.forward-headers-strategy: native` 处理 `X-Forwarded-For`，插件沿用同一套解析以便后台看到的 IP 与访客明细一致。能否伪造这个头取决于部署（代理是否会覆盖它），但即便伪造成功，影响也只限于冒充某个地址收发对话，不会带来任何后台权限。
+一个平台层面的说明：如果站点前面有反向代理，Halo 以 `server.forward-headers-strategy: native` 处理 `X-Forwarded-For`，插件沿用同一套解析以便后台看到的 IP 与访客明细一致。能否伪造这个头取决于部署（代理是否会覆盖它），而且即使伪造成功也只能落到另一个**设备 key** 上——对话归属设备，不归属地址，所以冒充别人的地址并不等于能读到别人的对话。
+
+## 关于「加密」的边界
+
+需要说清楚这个功能做到了什么、没做到什么：
+
+- **传输**：默认只允许 HTTPS，非加密连接直接 403，消息文本不会以明文经过网络。这是防止被中途截获的关键，前提是站点本身启用了 HTTPS。
+- **访问**：对话归属一台设备（地址 + User-Agent），读写都不接受参数指定；后台三个写/读接口只授予超级管理员角色；插件不签发任何凭据，因此不存在通过它提权的路径。
+- **存储**：消息只存在你自己的 Halo 数据库里，不经过任何第三方；按保留天数自动清理。
+- **没有做到的**：这不是端到端加密。服务端必须持有明文，才能在你不在线时把消息暂存、并在后台展示给你，所以任何能直接读取数据库或服务器内存的人都能看到内容。要真正做到端到端，需要双方交换密钥、且后台无法解密，那样你也读不到访客的回复。
 
 ## 当前在线访客
 

@@ -55,7 +55,7 @@ const detail = ref<RecordView | null>(null)
 const rowBusy = reactive<Record<string, boolean>>({})
 const rowError = reactive<Record<string, string>>({})
 const unreadTotal = ref(0)
-const unreadByIp = ref<Record<string, number>>({})
+const unreadByKey = ref<Record<string, number>>({})
 
 let pollTimer: number | undefined
 let searchTimer: number | undefined
@@ -64,15 +64,19 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value
 const canPrev = computed(() => page.value > 1)
 const canNext = computed(() => page.value < totalPages.value)
 const historyTotal = computed(() => stats.value.historyTotal ?? (stats.value.humans ?? 0) + (stats.value.bots ?? 0))
-const unreadIps = computed(() => Object.keys(unreadByIp.value))
-
+/** A conversation belongs to the device behind the record, not to the address. */
 function unreadFor(item: RecordView): number {
-  return item.ip ? unreadByIp.value[item.ip] || 0 : 0
+  return unreadByKey.value[item.name] || 0
 }
 
+/** Addresses of the records with unread replies, for the reminder line. */
+const unreadIps = computed(() =>
+  items.value.filter((item) => unreadFor(item) > 0).map((item) => item.ip || item.name),
+)
+
 /**
- * Unread counts per visitor address, so a reply from a visitor shows up on the row it
- * belongs to instead of only inside the conversation panel.
+ * Unread counts per device, so a reply from a visitor shows up on the row it belongs
+ * to instead of only inside the conversation panel.
  */
 async function loadUnread() {
   try {
@@ -80,11 +84,11 @@ async function loadUnread() {
     unreadTotal.value = data.unreadTotal || 0
     const counts: Record<string, number> = {}
     for (const item of data.items || []) {
-      if (item.unread > 0 && item.ip) {
-        counts[item.ip] = item.unread
+      if (item.unread > 0 && item.visitorKey) {
+        counts[item.visitorKey] = item.unread
       }
     }
-    unreadByIp.value = counts
+    unreadByKey.value = counts
   } catch (e) {
     /* the endpoint is admin only; keep the previous state on any failure */
   }

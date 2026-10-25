@@ -670,8 +670,11 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     /**
-     * Poll target of the tracker script. The address is taken from the request, never
-     * from a parameter, so one visitor can only ever read their own conversation.
+     * Poll target of the tracker script. The conversation key is derived from the
+     * request itself, never from a parameter, so a caller can only ever read the
+     * conversation of the device that made the call. The chat is refused over an
+     * unencrypted connection when the setting asks for HTTPS, so the text cannot be
+     * read off the wire.
      */
     private Mono<ServerResponse> getChatInbox(ServerRequest request) {
         String ip = resolveClientIp(request);
@@ -688,9 +691,13 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 payload.put("latestSeq", 0L);
                 return ServerResponse.ok().bodyValue(payload);
             }
-            payload.put("messages", chatService.poll(ip, since, CHAT_POLL_LIMIT).stream()
+            if (rejectsPlaintext(request, settings)) {
+                return insecureTransport();
+            }
+            String key = deviceKeyOf(request, ip);
+            payload.put("messages", chatService.poll(key, since, CHAT_POLL_LIMIT).stream()
                 .map(OnlineStatsEndpoint::toChatView).toList());
-            payload.put("latestSeq", chatService.latestSeq(ip));
+            payload.put("latestSeq", chatService.latestSeq(key));
             return ServerResponse.ok().bodyValue(payload);
         });
     }
@@ -700,7 +707,6 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         if (isChatRateLimited(ip)) {
             return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS).build();
         }
-        String userAgent = request.headers().firstHeader(HttpHeaders.USER_AGENT);
         return request.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
             })
             .onErrorResume(e -> Mono.empty())
@@ -710,18 +716,29 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                     return ServerResponse.status(HttpStatus.FORBIDDEN)
                         .bodyValue(Map.of("error", "chat disabled"));
                 }
+                if (rejectsPlaintext(request, settings)) {
+                    return insecureTransport();
+                }
                 String text = sanitizeChatText(str(body, "text", MAX_CHAT_TEXT));
                 if (text == null) {
                     return ServerResponse.badRequest()
                         .bodyValue(Map.of("error", "empty message"));
                 }
-                ChatMessageService.ChatEntry entry = chatService.append(ip,
-                    OnlineVisitorRegistry.deviceKey(ip, userAgent), "visitor", text, null,
-                    null, str(body, "url", MAX_URL), str(body, "title", MAX_TITLE));
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("ok", true);
-                payload.put("seq", entry.seq());
-                return ServerResponse.ok().bodyValue(payload);
+                String key = deviceKeyOf(request, ip);
+                // A signed in visitor is shown by their own account; everybody else is
+                // simply "访客". The identity comes from the session, not the body.
+                return chatService.resolveSignedInUser()
+                    .map(author -> author)
+                    .defaultIfEmpty(new ChatMessageService.Author(null, null))
+                    .flatMap(author -> {
+                        ChatMessageService.ChatEntry entry = chatService.append(key, ip,
+                            "visitor", text, author.name(), author.avatar(),
+                            str(body, "url", MAX_URL), str(body, "title", MAX_TITLE));
+                        Map<String, Object> payload = new LinkedHashMap<>();
+                        payload.put("ok", true);
+                        payload.put("seq", entry.seq());
+                        return ServerResponse.ok().bodyValue(payload);
+                    });
             }));
     }
 
@@ -739,29 +756,32 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     private Mono<ServerResponse> getChatMessages(ServerRequest request) {
-        String ip = request.queryParam("ip").orElse("").trim();
-        if (ip.isBlank()) {
-            return ServerResponse.badRequest().bodyValue(Map.of("error", "missing ip"));
+        String key = request.queryParam("key").orElse("").trim();
+        if (key.isBlank()) {
+            return ServerResponse.badRequest().bodyValue(Map.of("error", "missing key"));
         }
         boolean markRead = !"false".equals(request.queryParam("markRead").orElse("true"));
         return fetchSettings().flatMap(settings -> {
             if (markRead) {
-                chatService.markReadByAdmin(ip);
+                chatService.markReadByAdmin(key);
             }
             boolean showIp = settings.showIpInConsoleOrDefault();
+            List<ChatMessageService.ChatEntry> thread = chatService.thread(key);
+            String ip = thread.isEmpty() ? "" : String.valueOf(thread.get(0).ip());
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("ip", showIp ? ip : maskIp(ip));
+            payload.put("visitorKey", key);
+            payload.put("ip", showIp || ip.isBlank() ? ip : maskIp(ip));
             payload.put("enabled", settings.chatEnabledOrDefault());
             payload.put("avatar", settings.chatAvatarOrDefault());
-            payload.put("messages", chatService.thread(ip).stream()
+            payload.put("messages", thread.stream()
                 .map(OnlineStatsEndpoint::toAdminChatView).toList());
             return ServerResponse.ok().bodyValue(payload);
         });
     }
 
     /**
-     * Writes a console message to one visitor address. The author shown to the visitor
-     * is resolved from the authenticated account, not from the request body.
+     * Writes a console message to one device. The author shown to the visitor is
+     * resolved from the authenticated account, not from the request body.
      */
     private Mono<ServerResponse> postChatSend(ServerRequest request) {
         return request.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
@@ -775,14 +795,14 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                     return ServerResponse.status(HttpStatus.FORBIDDEN)
                         .bodyValue(Map.of("error", "chat disabled"));
                 }
-                String ip = str(body, "ip", MAX_SHORT);
+                String key = str(body, "key", MAX_VISITOR_ID);
                 String text = sanitizeChatText(str(body, "text", MAX_CHAT_TEXT));
-                if (ip == null || text == null) {
+                if (key == null || text == null) {
                     return ServerResponse.badRequest()
-                        .bodyValue(Map.of("error", "missing ip or text"));
+                        .bodyValue(Map.of("error", "missing key or text"));
                 }
                 return chatService.resolveAdmin().flatMap(admin -> {
-                    ChatMessageService.ChatEntry entry = chatService.append(ip, null,
+                    ChatMessageService.ChatEntry entry = chatService.append(key, null,
                         "admin", text, admin.name(), settings.chatAvatarOrDefault(),
                         null, null);
                     Map<String, Object> payload = new LinkedHashMap<>();
@@ -791,6 +811,41 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                     return ServerResponse.ok().bodyValue(payload);
                 });
             }));
+    }
+
+    /** The device fingerprint of the caller, matching the visitor records. */
+    private static String deviceKeyOf(ServerRequest request, String ip) {
+        return OnlineVisitorRegistry.deviceKey(ip,
+            request.headers().firstHeader(HttpHeaders.USER_AGENT));
+    }
+
+    private static boolean rejectsPlaintext(ServerRequest request,
+                                            OnlineStatsSettings settings) {
+        return settings.chatRequireHttpsOrDefault() && !isSecure(request);
+    }
+
+    /**
+     * A request counts as encrypted when Spring already rewrote the scheme from the
+     * forwarding headers (Halo runs with {@code forward-headers-strategy: native}), or
+     * when the proxy says so itself.
+     */
+    private static boolean isSecure(ServerRequest request) {
+        if (request.uri().getScheme() != null
+            && "https".equalsIgnoreCase(request.uri().getScheme())) {
+            return true;
+        }
+        String proto = request.headers().firstHeader("X-Forwarded-Proto");
+        if (proto == null || proto.isBlank()) {
+            return false;
+        }
+        return "https".equalsIgnoreCase(proto.split(",")[0].trim());
+    }
+
+    private static Mono<ServerResponse> insecureTransport() {
+        return ServerResponse.status(HttpStatus.FORBIDDEN)
+            .bodyValue(Map.of("error", "insecure transport",
+                "hint", "即时通讯需要 HTTPS；如果站点在反向代理后面且代理没有设置 "
+                    + "X-Forwarded-Proto，可在插件设置里关闭「仅允许 HTTPS」"));
     }
 
     /**
@@ -822,20 +877,27 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         }
     }
 
+    /**
+     * What the visitor's page is allowed to see: the text, who wrote it, and when.
+     * Other visitors' addresses, device keys and browsing history never appear here.
+     */
     private static Map<String, Object> toChatView(ChatMessageService.ChatEntry entry) {
         Map<String, Object> view = new LinkedHashMap<>();
         view.put("seq", entry.seq());
         view.put("direction", entry.direction());
         view.put("text", entry.text());
         view.put("sentAt", entry.sentAt());
-        view.put("adminName", entry.adminName());
-        view.put("adminAvatar", entry.adminAvatar());
+        if ("admin".equals(entry.direction())) {
+            view.put("authorName", entry.authorName());
+            view.put("authorAvatar", entry.authorAvatar());
+        }
         return view;
     }
 
     private static Map<String, Object> toAdminChatView(ChatMessageService.ChatEntry entry) {
         Map<String, Object> view = toChatView(entry);
-        view.put("visitorKey", entry.visitorKey());
+        view.put("authorName", entry.authorName());
+        view.put("authorAvatar", entry.authorAvatar());
         view.put("pageUrl", entry.pageUrl());
         view.put("pageTitle", entry.pageTitle());
         view.put("readByAdmin", entry.readByAdmin());
@@ -846,7 +908,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         ChatMessageService.Conversation conversation, boolean showIp) {
         ChatMessageService.ChatEntry last = conversation.last();
         Map<String, Object> view = new LinkedHashMap<>();
-        view.put("ip", showIp ? conversation.ip() : maskIp(conversation.ip()));
+        view.put("visitorKey", conversation.key());
+        view.put("ip", showIp ? last.ip() : maskIp(last.ip()));
         view.put("unread", conversation.unread());
         view.put("total", conversation.total());
         view.put("lastText", last.text());
@@ -881,8 +944,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
 
     private Mono<OnlineStatsSettings> fetchSettings() {
         return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null,
-                null, null, null));
+            .defaultIfEmpty(OnlineStatsSettings.empty());
     }
 
     private String resolveClientIp(ServerRequest request) {

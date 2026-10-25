@@ -57,10 +57,13 @@ public class OnlineStatsPlugin extends BasePlugin {
             try {
                 statsService.refreshOfficialCounts();
                 settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-                    .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null,
-                        null, null, null, null, null))
-                    .subscribe(settings -> statsService
-                        .ensureAdjustment(settings.officialViewsAdjustmentOrDefault()));
+                    .defaultIfEmpty(OnlineStatsSettings.empty())
+                    .subscribe(settings -> {
+                        statsService
+                            .ensureAdjustment(settings.officialViewsAdjustmentOrDefault());
+                        // Conversations follow the visitor retention window.
+                        chatService.prune(settings.historyRetentionDaysOrDefault());
+                    });
             } catch (Exception ignored) {
                 // a failed refresh must never kill the scheduler
             }

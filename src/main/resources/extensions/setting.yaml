@@ -40,8 +40,13 @@ spec:
           name: chatEnabled
           label: 即时通讯（后台给访客发消息）
           help: |-
-            总开关。打开后，前台页面每 5 秒查询一次新消息，在「访客明细」点某个 IP 的「更多」就能给这个 IP 的访客发消息，对方的页面上会弹出对话卡片并可以直接回复；关闭后前台不再有任何对话相关的请求，后台也不能再发送。
+            总开关。打开后，前台页面每 5 秒查询一次新消息，在「访客明细」点某个 IP 的「更多」就能给这个访客发消息，对方的页面上会弹出对话卡片并可以直接回复；关闭后前台不再有任何对话相关的请求，后台也不能再发送。
             提示：此功能仅为学习测试使用，请勿用于正式环境。
+          value: true
+        - $formkit: checkbox
+          name: chatRequireHttps
+          label: 仅允许 HTTPS（推荐开启）
+          help: 打开后，对话接口在非加密连接上直接拒绝（返回 403），消息文本不会以明文经过网络。站点在反向代理后面、代理没有设置 X-Forwarded-Proto 时会出现这种情况，可临时关闭本项排查。
           value: true
         - $formkit: text
           name: chatAvatar
@@ -56,7 +61,7 @@ spec:
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数
-          help: 超过该天数的访客明细会被自动清理，文章与每日统计不会删除。
+          help: 超过该天数的访客明细会被自动清理，文章与每日统计不会删除。对话记录也按这个天数清理。
           value: 90
           min: 1
           max: 3650

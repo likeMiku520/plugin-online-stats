@@ -76,14 +76,14 @@ function record(): RecordView {
   }
 }
 
-function chatMessage(seq: number, direction: string, text: string) {
+function chatMessage(seq: number, direction: string, text: string, authorName: string | null = 'fufu大王') {
   return {
     seq,
     direction,
     text,
     sentAt: Date.now(),
-    adminName: 'fufu大王',
-    adminAvatar: 'https://blog.fufu520.cn/upload/fufu_touming.webp',
+    authorName,
+    authorAvatar: 'https://blog.fufu520.cn/upload/fufu_touming.webp',
     visitorKey: null,
     pageUrl: null,
     pageTitle: null,
@@ -102,7 +102,7 @@ beforeEach(() => {
           avatar: 'https://blog.fufu520.cn/upload/fufu_touming.webp',
           messages: [
             chatMessage(1, 'admin', '你好'),
-            chatMessage(2, 'visitor', '在的'),
+            chatMessage(2, 'visitor', '在的', null),
             chatMessage(3, 'admin', '看到你在看这篇博客'),
           ],
         },
@@ -157,6 +157,44 @@ describe('the console conversation panel', () => {
 
     expect(wrapper.find('.os-chat__notice').text()).toContain('此功能仅为学习测试使用')
     expect(wrapper.find('.os-chat__input').attributes('disabled')).toBeUndefined()
+  })
+
+  it('addresses the conversation by device, so an address is not required', async () => {
+    const anonymous = { ...record(), ip: null }
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: anonymous } })
+    await flushPromises()
+
+    const chatCall = mocked.get.mock.calls.find((call) => String(call[0]).includes('/chat-messages'))
+    expect(chatCall?.[1]?.params?.key).toBe('v-1')
+    expect(wrapper.find('.os-chat').exists()).toBe(true)
+  })
+
+  it('names a signed in visitor instead of calling them a visitor', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/chat-messages')) {
+        return Promise.resolve({
+          data: {
+            visitorKey: 'v-1',
+            enabled: true,
+            avatar: '',
+            messages: [
+              chatMessage(1, 'admin', '你好'),
+              chatMessage(2, 'visitor', '在的', '小明'),
+            ],
+          },
+        })
+      }
+      return Promise.resolve({
+        data: { name: 'fufu', displayName: 'fufu大王', avatar: '' },
+      })
+    })
+
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const meta = wrapper.findAll('.os-chat__meta').map((node) => node.text())
+    expect(meta.some((line) => line.includes('小明'))).toBe(true)
+    expect(meta.some((line) => line.includes('访客'))).toBe(false)
   })
 
   it('hides the whole conversation section once the plugin setting turns it off', async () => {

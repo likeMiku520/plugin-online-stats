@@ -155,29 +155,14 @@
    * ------------------------------------------------------------------------- */
   var chatEnabled = cfg.chatEnabled !== false;
   var chatPollSeconds = cfg.chatPollSeconds > 0 ? cfg.chatPollSeconds : 5;
-  var CHAT_SEQ_KEY = 'os_chat_seq';
   var CHAT_MAX_LENGTH = 1000;
   var CHAT_RENDER_LIMIT = 30;
 
-  function readChatSeq() {
-    try {
-      var stored = window.localStorage.getItem(CHAT_SEQ_KEY);
-      return stored ? parseInt(stored, 10) || 0 : 0;
-    } catch (e) {
-      return 0;
-    }
-  }
-
-  function writeChatSeq(value) {
-    try {
-      window.localStorage.setItem(CHAT_SEQ_KEY, String(value));
-    } catch (e) {
-      /* private mode, the in-memory cursor still advances */
-    }
-  }
-
-  var chatSeq = readChatSeq();
-  var chatFirstPoll = chatSeq === 0;
+  /* Nothing is kept on the visitor's device: the cursor lives for this page only, and a
+   * reload always starts over. That is both the privacy answer and what makes a reload
+   * put the card away for good until the next message arrives. */
+  var chatSeq = 0;
+  var chatSeeded = false;
   var chatMessages = [];
   var chatUnread = 0;
   var chatSending = false;
@@ -221,16 +206,16 @@
     return null;
   }
 
-  function adminLabel() {
+  function authorLabel() {
     var message = lastAdminMessage();
-    return message && message.adminName ? message.adminName : '博主';
+    return message && message.authorName ? message.authorName : '博主';
   }
 
   /* One author writes the whole thread, so every message is drawn with the same
    avatar instead of mixing whatever each message happened to carry. */
-  function adminAvatar() {
+  function authorAvatar() {
     var message = lastAdminMessage();
-    return message && message.adminAvatar ? String(message.adminAvatar) : '';
+    return message && message.authorAvatar ? String(message.authorAvatar) : '';
   }
 
   function injectChatStyle() {
@@ -318,8 +303,8 @@
   }
 
   function buildAvatar(className) {
-    var fallback = adminLabel().slice(0, 1);
-    var source = adminAvatar();
+    var fallback = authorLabel().slice(0, 1);
+    var source = authorAvatar();
     if (source.indexOf('https://') === 0 || source.indexOf('http://') === 0) {
       var image = chatElement('img', className);
       image.src = source;
@@ -392,8 +377,8 @@
 
   function buildThread() {
     var opener = lastAdminMessage();
-    chatDom.title.textContent = opener && opener.adminName
-      ? opener.adminName + ' 给你发来消息' : '你有一条新消息';
+    chatDom.title.textContent = opener && opener.authorName
+      ? opener.authorName + ' 给你发来消息' : '你有一条新消息';
     chatDom.thread.textContent = '';
     var start = Math.max(0, chatMessages.length - CHAT_RENDER_LIMIT);
     for (var i = start; i < chatMessages.length; i++) {
@@ -406,7 +391,7 @@
       var box = chatElement('div');
       if (!mine) {
         box.appendChild(chatElement('div', 'oschat-name',
-          adminLabel() + (message.sentAt ? ' · ' + timeLabel(message.sentAt) : '')));
+          authorLabel() + (message.sentAt ? ' · ' + timeLabel(message.sentAt) : '')));
       }
       var bubble = chatElement('div', 'oschat-bubble');
       bubble.appendChild(chatElement('p', 'oschat-text', message.text));
@@ -672,8 +657,8 @@
         });
         if (data.seq > chatSeq) {
           chatSeq = data.seq;
-          writeChatSeq(chatSeq);
         }
+        chatSeeded = true;
         renderThread();
         setNote('');
       } else {
@@ -691,8 +676,9 @@
     if (!chatEnabled || document.hidden) {
       return;
     }
-    var first = chatFirstPoll;
-    chatFirstPoll = false;
+    /* The first poll of a page never shows anything: it only learns where the thread
+     * stands, so a reload leaves nothing on screen until a new message arrives. */
+    var seeding = !chatSeeded;
     fetch(apiBase + 'chat-inbox?since=' + chatSeq, {
       headers: { Accept: 'application/json' }
     }).then(function (response) {
@@ -701,25 +687,21 @@
       if (!data || data.enabled === false) {
         return;
       }
+      chatSeeded = true;
       var list = data.messages || [];
       var incoming = 0;
-      for (var i = 0; i < list.length; i++) {
-        pushMessage(list[i]);
-        if (isNewFromAdmin(list[i])) {
-          incoming++;
+      if (!seeding) {
+        for (var i = 0; i < list.length; i++) {
+          pushMessage(list[i]);
+          if (isNewFromAdmin(list[i])) {
+            incoming++;
+          }
         }
       }
       if (typeof data.latestSeq === 'number' && data.latestSeq > chatSeq) {
         chatSeq = data.latestSeq;
-        writeChatSeq(chatSeq);
       }
-      if (!chatMessages.length) {
-        return;
-      }
-      if (first) {
-        // A first visit only records where the thread stands; old messages must not
-        // pop up over a page the visitor just opened.
-        renderLauncher();
+      if (seeding || !chatMessages.length) {
         return;
       }
       if (incoming > 0) {

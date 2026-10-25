@@ -1,17 +1,32 @@
 package com.fufu.onlinestats;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 
 import java.util.List;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Sort;
+import reactor.core.publisher.Flux;
+import run.halo.app.extension.ListOptions;
+import run.halo.app.extension.Metadata;
+import run.halo.app.extension.ReactiveExtensionClient;
 
 /**
- * The visitor card polls with a cursor, so the cursor contract is what the whole
- * conversation feature rests on: zero means "first poll, send the newest batch
- * without replaying history", anything else means "only what is newer".
+ * The visitor card polls with a cursor and reaches its conversation through a device
+ * key, and storage is bounded by the visitor retention window. All three contracts are
+ * pinned here.
  */
 class ChatMessageServiceTest {
+
+    private static final String KEY = "v-0123456789abcdef";
+    private static final String OTHER_KEY = "v-fedcba9876543210";
+    private static final long DAY = 24L * 60 * 60 * 1000;
 
     private static ChatMessageService service() {
         // Persistence is queued to a writer that start() creates, so an unstarted
@@ -19,14 +34,44 @@ class ChatMessageServiceTest {
         return new ChatMessageService(null, null);
     }
 
+    private static void say(ChatMessageService service, String key, String direction,
+                            String text) {
+        service.append(key, "10.0.0.1", direction, text, "fufu", null, null, null);
+    }
+
+    private static ChatMessage stored(String name, long seq, long sentAt, String text) {
+        ChatMessage message = new ChatMessage();
+        message.setMetadata(new Metadata());
+        message.getMetadata().setName(name);
+        message.getSpec().setSeq(seq);
+        message.getSpec().setVisitorKey(KEY);
+        message.getSpec().setIp("10.0.0.1");
+        message.getSpec().setDirection("admin");
+        message.getSpec().setText(text);
+        message.getSpec().setSentAt(sentAt);
+        return message;
+    }
+
+    private static void await(BooleanSupplier condition, long timeoutMillis)
+        throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMillis;
+        while (System.currentTimeMillis() < deadline) {
+            if (condition.getAsBoolean()) {
+                return;
+            }
+            Thread.sleep(20L);
+        }
+        throw new AssertionError("condition was not met in time");
+    }
+
     @Test
     void firstPollReturnsTheNewestMessagesInsteadOfTheOldest() {
         ChatMessageService service = service();
         for (int i = 0; i < 5; i++) {
-            service.append("10.0.0.1", "v-1", "admin", "message " + i, "fufu", null, null, null);
+            say(service, KEY, "admin", "message " + i);
         }
 
-        List<ChatMessageService.ChatEntry> batch = service.poll("10.0.0.1", 0L, 3);
+        List<ChatMessageService.ChatEntry> batch = service.poll(KEY, 0L, 3);
 
         assertEquals(3, batch.size());
         assertEquals(List.of("message 2", "message 3", "message 4"),
@@ -36,41 +81,82 @@ class ChatMessageServiceTest {
     @Test
     void cursorReturnsOnlyNewerMessagesInOrder() {
         ChatMessageService service = service();
-        long first = service.append("10.0.0.1", "v-1", "admin", "hi", "fufu", null, null, null).seq();
-        service.append("10.0.0.1", "v-1", "admin", "are you there", "fufu", null, null, null);
-        service.append("10.0.0.1", "v-1", "visitor", "yes", null, null, "/post", "Post");
+        say(service, KEY, "admin", "hi");
+        long first = service.latestSeq(KEY);
+        say(service, KEY, "admin", "are you there");
+        say(service, KEY, "visitor", "yes");
 
-        List<ChatMessageService.ChatEntry> fresh = service.poll("10.0.0.1", first, 50);
+        List<ChatMessageService.ChatEntry> fresh = service.poll(KEY, first, 50);
 
         assertEquals(List.of("are you there", "yes"),
             fresh.stream().map(ChatMessageService.ChatEntry::text).toList());
-        assertEquals(3L, service.latestSeq("10.0.0.1"));
+        assertEquals(3L, service.latestSeq(KEY));
+    }
+
+    @Test
+    void aConversationIsOnlyReachableThroughItsOwnDeviceKey() {
+        ChatMessageService service = service();
+        say(service, KEY, "admin", "for one device only");
+
+        assertTrue(service.poll(OTHER_KEY, 0L, 50).isEmpty());
+        assertEquals(0L, service.latestSeq(OTHER_KEY));
+        assertEquals(1, service.conversations().size());
+        assertEquals(KEY, service.conversations().get(0).key());
     }
 
     @Test
     void conversationCountsRepliesUntilTheConsoleReadsThem() {
         ChatMessageService service = service();
-        service.append("10.0.0.1", "v-1", "admin", "hi", "fufu", null, null, null);
-        service.append("10.0.0.1", "v-1", "visitor", "hello", null, null, null, null);
-        service.append("10.0.0.1", "v-1", "visitor", "again", null, null, null, null);
-        service.append("10.0.0.2", "v-2", "admin", "other visitor", "fufu", null, null, null);
+        say(service, KEY, "admin", "hi");
+        say(service, KEY, "visitor", "hello");
+        say(service, KEY, "visitor", "again");
+        say(service, OTHER_KEY, "admin", "other device");
 
-        List<ChatMessageService.Conversation> conversations = service.conversations();
-
-        assertEquals(2, conversations.size());
+        assertEquals(2, service.conversations().size());
         assertEquals(2, service.unreadTotal());
 
-        service.markReadByAdmin("10.0.0.1");
+        service.markReadByAdmin(KEY);
 
         assertEquals(0, service.unreadTotal());
     }
 
     @Test
-    void anUnknownAddressHasNoConversation() {
+    void repliesCarryTheIdentityTheServerResolvedForThem() {
         ChatMessageService service = service();
-        service.append("10.0.0.1", "v-1", "admin", "hi", "fufu", null, null, null);
+        service.append(KEY, "10.0.0.1", "visitor", "hello", "小明",
+            "https://blog.fufu520.cn/upload/x.webp", "/post", "Post");
 
-        assertTrue(service.poll("10.0.0.9", 0L, 50).isEmpty());
-        assertEquals(0L, service.latestSeq("10.0.0.9"));
+        ChatMessageService.ChatEntry entry = service.thread(KEY).get(0);
+
+        assertEquals("小明", entry.authorName());
+        assertEquals("https://blog.fufu520.cn/upload/x.webp", entry.authorAvatar());
+        assertEquals("/post", entry.pageUrl());
+        assertEquals("Post", entry.pageTitle());
+        assertFalse(entry.readByAdmin());
+    }
+
+    @Test
+    void messagesOlderThanTheRetentionWindowAreDropped() throws Exception {
+        ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
+        doReturn(Flux.just(
+            stored("c-old", 1L, System.currentTimeMillis() - 40L * DAY, "ancient"),
+            stored("c-new", 2L, System.currentTimeMillis(), "fresh")))
+            .when(client).listAll(eq(ChatMessage.class), any(ListOptions.class),
+                any(Sort.class));
+
+        ChatMessageService service = new ChatMessageService(client, null);
+        service.start();
+        try {
+            await(service::isLoaded, 5_000L);
+            assertEquals(2, service.thread(KEY).size());
+
+            service.prune(30);
+
+            List<ChatMessageService.ChatEntry> left = service.thread(KEY);
+            assertEquals(1, left.size());
+            assertEquals("fresh", left.get(0).text());
+        } finally {
+            service.stop();
+        }
     }
 }

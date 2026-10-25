@@ -3,6 +3,8 @@ package com.fufu.onlinestats;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
@@ -34,13 +36,19 @@ import run.halo.app.extension.ReactiveExtensionClient;
 import run.halo.app.infra.AnonymousUserConst;
 
 /**
- * Conversations between the console and the people browsing the blog. A conversation
- * is keyed by the visitor's IP address: the console writes to an address and every
- * browser behind that address receives the message on its next poll.
+ * Conversations between the console and the people browsing the blog.
+ *
+ * <p>A conversation belongs to one device, identified by the same fingerprint the
+ * visitor records use (client address plus User-Agent). The console addresses a device
+ * rather than an address, and the poll path derives the key from the request itself,
+ * never from a parameter, so a request can only ever reach its own conversation: a
+ * second browser behind the same address, or a forged forwarding header, lands on a
+ * different key and sees nothing.</p>
  *
  * <p>Messages are served from memory so a poll is cheap, and written to
  * {@link ChatMessage} extensions in the background so a plugin restart or an upgrade
- * does not lose the thread.</p>
+ * does not lose the thread. Storage is bounded both by a per-conversation cap and by
+ * the visitor retention setting.</p>
  */
 @Service
 public class ChatMessageService {
@@ -94,21 +102,25 @@ public class ChatMessageService {
     }
 
     /**
-     * Identity shown to the visitor. The current administrator is read from the
-     * security context rather than from the request body, so the name and the avatar a
-     * visitor sees cannot be forged by a caller.
+     * The account behind the current request, or empty when nobody is signed in. The
+     * name and avatar a visitor sees on their own message are read from the security
+     * context rather than from the request body, so they cannot be claimed by a caller.
      */
-    public Mono<AdminView> resolveAdmin() {
-        Mono<AdminView> fallback = Mono.just(new AdminView(ADMIN_FALLBACK_NAME, null));
+    public Mono<Author> resolveSignedInUser() {
         return ReactiveSecurityContextHolder.getContext()
             .map(SecurityContext::getAuthentication)
             .map(Authentication::getName)
             .filter(name -> name != null && !name.isBlank()
                 && !AnonymousUserConst.isAnonymousUser(name))
             .flatMap(userService::getUser)
-            .map(user -> new AdminView(displayNameOf(user), avatarOf(user)))
-            .onErrorReturn(new AdminView(ADMIN_FALLBACK_NAME, null))
-            .switchIfEmpty(fallback);
+            .map(user -> new Author(displayNameOf(user), avatarOf(user)))
+            .onErrorResume(error -> Mono.empty());
+    }
+
+    /** Identity shown to the visitor for console messages. */
+    public Mono<Author> resolveAdmin() {
+        return resolveSignedInUser()
+            .defaultIfEmpty(new Author(ADMIN_FALLBACK_NAME, null));
     }
 
     private static String displayNameOf(User user) {
@@ -131,16 +143,16 @@ public class ChatMessageService {
         return avatar == null || avatar.isBlank() ? null : avatar;
     }
 
-    /** Adds a message to the conversation and queues its persistence. */
-    public ChatEntry append(String ip, String visitorKey, String direction, String text,
-                            String adminName, String adminAvatar, String pageUrl,
+    /** Adds a message to one device's conversation and queues its persistence. */
+    public ChatEntry append(String key, String ip, String direction, String text,
+                            String authorName, String authorAvatar, String pageUrl,
                             String pageTitle) {
         long now = System.currentTimeMillis();
         long order = seq.incrementAndGet();
-        ChatEntry entry = new ChatEntry(order, ip, visitorKey, direction, text, now,
-            adminName, adminAvatar, pageUrl, pageTitle, !"visitor".equals(direction));
+        ChatEntry entry = new ChatEntry(order, key, ip, direction, text, now,
+            authorName, authorAvatar, pageUrl, pageTitle, !"visitor".equals(direction));
         Deque<ChatEntry> thread =
-            conversations.computeIfAbsent(ip, key -> new ConcurrentLinkedDeque<>());
+            conversations.computeIfAbsent(key, ignored -> new ConcurrentLinkedDeque<>());
         thread.addLast(entry);
         evictOldest(thread);
         trimConversations();
@@ -160,44 +172,36 @@ public class ChatMessageService {
 
     private void trimConversations() {
         while (conversations.size() > MAX_CONVERSATIONS) {
-            String oldest = null;
+            String oldestKey = null;
             long oldestAt = Long.MAX_VALUE;
             for (Map.Entry<String, Deque<ChatEntry>> entry : conversations.entrySet()) {
                 ChatEntry last = entry.getValue().peekLast();
                 long at = last == null ? 0L : last.sentAt();
                 if (at < oldestAt) {
                     oldestAt = at;
-                    oldest = entry.getKey();
+                    oldestKey = entry.getKey();
                 }
             }
-            if (oldest == null) {
+            if (oldestKey == null) {
                 return;
             }
-            conversations.remove(oldest);
+            conversations.remove(oldestKey);
         }
     }
 
     /**
      * Messages after the caller's cursor. A cursor of zero means "first poll of this
-     * browser", which returns the newest batch without replaying the whole history.
+     * page", which returns the newest batch without replaying the whole history.
      */
-    public List<ChatEntry> poll(String ip, long since, int limit) {
-        Deque<ChatEntry> thread = conversations.get(ip);
+    public List<ChatEntry> poll(String key, long since, int limit) {
+        Deque<ChatEntry> thread = conversations.get(key);
         if (thread == null) {
             return List.of();
         }
-        int size = thread.size();
-        List<ChatEntry> result = new ArrayList<>();
         if (since <= 0) {
-            int skip = Math.max(0, size - limit);
-            int index = 0;
-            for (ChatEntry entry : thread) {
-                if (index++ >= skip) {
-                    result.add(entry);
-                }
-            }
-            return result;
+            return newest(thread, limit);
         }
+        List<ChatEntry> result = new ArrayList<>();
         for (ChatEntry entry : thread) {
             if (entry.seq() > since) {
                 result.add(entry);
@@ -209,19 +213,28 @@ public class ChatMessageService {
         return result;
     }
 
-    public long latestSeq(String ip) {
-        Deque<ChatEntry> thread = conversations.get(ip);
+    private static List<ChatEntry> newest(Deque<ChatEntry> thread, int limit) {
+        List<ChatEntry> result = new ArrayList<>();
+        int skip = Math.max(0, thread.size() - limit);
+        int index = 0;
+        for (ChatEntry entry : thread) {
+            if (index++ >= skip) {
+                result.add(entry);
+            }
+        }
+        return result;
+    }
+
+    public long latestSeq(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
         ChatEntry last = thread == null ? null : thread.peekLast();
         return last == null ? 0L : last.seq();
     }
 
-    /** Full thread for the console, newest last, capped like the poll path. */
-    public List<ChatEntry> thread(String ip) {
-        Deque<ChatEntry> thread = conversations.get(ip);
-        if (thread == null) {
-            return List.of();
-        }
-        return new ArrayList<>(thread);
+    /** Full thread for the console, oldest first. */
+    public List<ChatEntry> thread(String key) {
+        List<ChatEntry> result = new ArrayList<>(poll(key, 0L, MAX_PER_CONVERSATION));
+        return result;
     }
 
     public List<Conversation> conversations() {
@@ -254,14 +267,39 @@ public class ChatMessageService {
     }
 
     /** Marks every visitor reply of one conversation as seen by the console. */
-    public void markReadByAdmin(String ip) {
-        Deque<ChatEntry> thread = conversations.get(ip);
+    public void markReadByAdmin(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
         if (thread == null) {
             return;
         }
         for (ChatEntry entry : thread) {
             if (entry.markReadByAdmin()) {
                 persist(entry);
+            }
+        }
+    }
+
+    /**
+     * Drops messages older than the visitor retention window, in memory and in storage,
+     * so a conversation cannot outlive the history it belongs to.
+     */
+    public void prune(int retentionDays) {
+        long cutoff = Instant.now().minus(Math.max(1, retentionDays), ChronoUnit.DAYS)
+            .toEpochMilli();
+        for (Map.Entry<String, Deque<ChatEntry>> conversation : conversations.entrySet()) {
+            Deque<ChatEntry> thread = conversation.getValue();
+            List<ChatEntry> expired = new ArrayList<>();
+            for (ChatEntry entry : thread) {
+                if (entry.sentAt() < cutoff) {
+                    expired.add(entry);
+                }
+            }
+            for (ChatEntry entry : expired) {
+                thread.remove(entry);
+                delete(entry);
+            }
+            if (thread.isEmpty()) {
+                conversations.remove(conversation.getKey());
             }
         }
     }
@@ -277,23 +315,23 @@ public class ChatMessageService {
             .subscribe(collected::add, error -> log.warn("Failed to load chat messages", error),
                 () -> {
                     Map<String, List<ChatEntry>> grouped = new LinkedHashMap<>();
+                    long highest = 0L;
                     for (ChatMessage message : collected) {
                         ChatEntry entry = toEntry(message);
-                        if (entry != null) {
-                            grouped.computeIfAbsent(entry.ip(), key -> new ArrayList<>())
-                                .add(entry);
+                        if (entry == null) {
+                            continue;
                         }
+                        grouped.computeIfAbsent(entry.key(), ignored -> new ArrayList<>())
+                            .add(entry);
+                        highest = Math.max(highest, entry.seq());
                     }
-                    long highest = 0L;
                     for (Map.Entry<String, List<ChatEntry>> group : grouped.entrySet()) {
                         List<ChatEntry> thread = group.getValue();
                         thread.sort(Comparator.comparingLong(ChatEntry::seq));
                         Deque<ChatEntry> deque = new ConcurrentLinkedDeque<>();
                         int from = Math.max(0, thread.size() - MAX_PER_CONVERSATION);
                         for (int i = from; i < thread.size(); i++) {
-                            ChatEntry entry = thread.get(i);
-                            deque.addLast(entry);
-                            highest = Math.max(highest, entry.seq());
+                            deque.addLast(thread.get(i));
                         }
                         for (int i = 0; i < from; i++) {
                             delete(thread.get(i));
@@ -315,14 +353,16 @@ public class ChatMessageService {
             return null;
         }
         ChatMessage.Spec spec = message.getSpec();
-        if (spec.getIp() == null || spec.getSeq() == null) {
+        // Rows written before conversations were keyed by device have no key and belong
+        // to no device; they are left for prune() to age out.
+        if (spec.getVisitorKey() == null || spec.getSeq() == null) {
             return null;
         }
-        return new ChatEntry(spec.getSeq(), spec.getIp(), spec.getVisitorKey(),
+        return new ChatEntry(spec.getSeq(), spec.getVisitorKey(), spec.getIp(),
             spec.getDirection() == null ? "admin" : spec.getDirection(),
             spec.getText() == null ? "" : spec.getText(),
             spec.getSentAt() == null ? 0L : spec.getSentAt(),
-            spec.getAdminName(), spec.getAdminAvatar(), spec.getPageUrl(),
+            spec.getAuthorName(), spec.getAuthorAvatar(), spec.getPageUrl(),
             spec.getPageTitle(), Boolean.TRUE.equals(spec.getReadByAdmin()), true);
     }
 
@@ -369,6 +409,8 @@ public class ChatMessageService {
             }
             existing.getSpec().setReadByAdmin(entry.readByAdmin());
             existing.getSpec().setText(entry.text());
+            existing.getSpec().setAuthorName(entry.authorName());
+            existing.getSpec().setAuthorAvatar(entry.authorAvatar());
             client.update(existing).block(WRITE_TIMEOUT);
             entry.markPersisted();
         } catch (Exception updateError) {
@@ -404,13 +446,13 @@ public class ChatMessageService {
         message.getMetadata().setName(entry.name());
         ChatMessage.Spec spec = message.getSpec();
         spec.setSeq(entry.seq());
+        spec.setVisitorKey(entry.key());
         spec.setIp(entry.ip());
-        spec.setVisitorKey(entry.visitorKey());
         spec.setDirection(entry.direction());
         spec.setText(entry.text());
         spec.setSentAt(entry.sentAt());
-        spec.setAdminName(entry.adminName());
-        spec.setAdminAvatar(entry.adminAvatar());
+        spec.setAuthorName(entry.authorName());
+        spec.setAuthorAvatar(entry.authorAvatar());
         spec.setPageUrl(entry.pageUrl());
         spec.setPageTitle(entry.pageTitle());
         spec.setReadByAdmin(entry.readByAdmin());
@@ -424,42 +466,42 @@ public class ChatMessageService {
     public static final class ChatEntry {
 
         private final long seq;
+        private final String key;
         private final String ip;
-        private final String visitorKey;
         private final String direction;
         private final String text;
         private final long sentAt;
-        private final String adminName;
-        private final String adminAvatar;
+        private final String authorName;
+        private final String authorAvatar;
         private final String pageUrl;
         private final String pageTitle;
         private final String name;
         private volatile boolean readByAdmin;
         private volatile boolean persisted;
 
-        ChatEntry(long seq, String ip, String visitorKey, String direction, String text,
-                  long sentAt, String adminName, String adminAvatar, String pageUrl,
+        ChatEntry(long seq, String key, String ip, String direction, String text,
+                  long sentAt, String authorName, String authorAvatar, String pageUrl,
                   String pageTitle, boolean readByAdmin) {
-            this(seq, ip, visitorKey, direction, text, sentAt, adminName, adminAvatar,
-                pageUrl, pageTitle, readByAdmin, false);
+            this(seq, key, ip, direction, text, sentAt, authorName, authorAvatar, pageUrl,
+                pageTitle, readByAdmin, false);
         }
 
-        ChatEntry(long seq, String ip, String visitorKey, String direction, String text,
-                  long sentAt, String adminName, String adminAvatar, String pageUrl,
+        ChatEntry(long seq, String key, String ip, String direction, String text,
+                  long sentAt, String authorName, String authorAvatar, String pageUrl,
                   String pageTitle, boolean readByAdmin, boolean persisted) {
             this.seq = seq;
+            this.key = key;
             this.ip = ip;
-            this.visitorKey = visitorKey;
             this.direction = direction;
             this.text = text;
             this.sentAt = sentAt;
-            this.adminName = adminName;
-            this.adminAvatar = adminAvatar;
+            this.authorName = authorName;
+            this.authorAvatar = authorAvatar;
             this.pageUrl = pageUrl;
             this.pageTitle = pageTitle;
             this.readByAdmin = readByAdmin;
             this.persisted = persisted;
-            this.name = "c-" + Long.toString(seq, 36) + "-" + shortHash(ip);
+            this.name = "c-" + Long.toString(seq, 36) + "-" + shortHash(key);
         }
 
         private static String shortHash(String value) {
@@ -497,12 +539,12 @@ public class ChatMessageService {
             return name;
         }
 
-        public String ip() {
-            return ip;
+        public String key() {
+            return key;
         }
 
-        public String visitorKey() {
-            return visitorKey;
+        public String ip() {
+            return ip;
         }
 
         public String direction() {
@@ -517,12 +559,12 @@ public class ChatMessageService {
             return sentAt;
         }
 
-        public String adminName() {
-            return adminName;
+        public String authorName() {
+            return authorName;
         }
 
-        public String adminAvatar() {
-            return adminAvatar;
+        public String authorAvatar() {
+            return authorAvatar;
         }
 
         public String pageUrl() {
@@ -539,10 +581,10 @@ public class ChatMessageService {
     }
 
     /** One row of the console conversation list. */
-    public record Conversation(String ip, ChatEntry last, int unread, int total) {
+    public record Conversation(String key, ChatEntry last, int unread, int total) {
     }
 
-    /** Author snapshot attached to every console message. */
-    public record AdminView(String name, String avatar) {
+    /** A display identity: who wrote a message. */
+    public record Author(String name, String avatar) {
     }
 }

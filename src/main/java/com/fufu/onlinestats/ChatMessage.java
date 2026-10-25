@@ -7,8 +7,11 @@ import run.halo.app.extension.AbstractExtension;
 import run.halo.app.extension.GVK;
 
 /**
- * One message of a console-to-visitor conversation. A conversation is keyed by the
- * visitor's IP address, so every browser of that address sees the same thread.
+ * One message of a console-to-visitor conversation.
+ *
+ * <p>A conversation is keyed by the visitor's device fingerprint (client address plus
+ * User-Agent), the same key the visitor records use, so only that one device can read
+ * the thread: another device behind the same address gets a different key.</p>
  */
 @GVK(group = "online-stats.halo.run", version = "v1alpha1",
     kind = "ChatMessage", plural = "chatmessages", singular = "chatmessage")
@@ -27,10 +30,11 @@ public class ChatMessage extends AbstractExtension {
         /** Monotonic order of the conversation, used as the client's poll cursor. */
         private Long seq;
 
-        private String ip;
-
-        /** Device fingerprint of the sender, so the console can link to its record. */
+        /** Device fingerprint that owns this conversation. */
         private String visitorKey;
+
+        /** Address the device was seen from, for the console to show. */
+        private String ip;
 
         /** "admin" for a message written in the console, "visitor" for a reply. */
         private String direction;
@@ -39,10 +43,13 @@ public class ChatMessage extends AbstractExtension {
 
         private Long sentAt;
 
-        /** Author snapshot, so the visitor popup needs no user lookup of its own. */
-        private String adminName;
+        /**
+         * Who wrote it: the administrator's name for a console message, and the signed
+         * in account's name when a logged in visitor replies. Null means "访客".
+         */
+        private String authorName;
 
-        private String adminAvatar;
+        private String authorAvatar;
 
         /** Page the visitor was on when the message was written. */
         private String pageUrl;

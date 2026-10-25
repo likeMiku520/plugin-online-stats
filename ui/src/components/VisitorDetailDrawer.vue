@@ -8,8 +8,9 @@ interface ChatMessage {
   direction: string
   text: string
   sentAt: number
-  adminName: string | null
-  adminAvatar: string | null
+  /** Who wrote it: the administrator, or the account a signed in visitor used. */
+  authorName: string | null
+  authorAvatar: string | null
   pageUrl: string | null
   pageTitle: string | null
   readByAdmin: boolean
@@ -48,8 +49,9 @@ const chatAvatar = ref('')
 
 let chatTimer: number | undefined
 
-const chatIp = computed(() => detail.value.ip || '')
-const canChat = computed(() => !!chatIp.value)
+/** A conversation belongs to the device behind the record, not to the address. */
+const chatKey = computed(() => detail.value.name)
+const canChat = computed(() => !!chatKey.value)
 
 const adminLabel = computed(() => admin.value?.displayName || admin.value?.name || '当前管理员')
 const adminInitial = computed(() => adminLabel.value.slice(0, 1))
@@ -179,7 +181,7 @@ async function loadChat() {
   }
   try {
     const { data } = await axios.get(`${api}/chat-messages`, {
-      params: { ip: chatIp.value },
+      params: { key: chatKey.value },
     })
     chatMessages.value = data.messages || []
     chatAvatar.value = data.avatar || ''
@@ -239,7 +241,7 @@ async function send() {
   // The message just written is the newest one, so it has to be visible.
   scrollOnNextLoad = true
   try {
-    await axios.post(`${api}/chat-send`, { ip: chatIp.value, text })
+    await axios.post(`${api}/chat-send`, { key: chatKey.value, text })
     chatDraft.value = ''
     await loadChat()
   } catch (e: any) {
@@ -322,7 +324,7 @@ onUnmounted(() => {
               >
                 <div class="os-chat__bubble">{{ message.text }}</div>
                 <div class="os-chat__meta">
-                  {{ message.direction === 'admin' ? adminLabel : '访客' }} ·
+                  {{ message.direction === 'admin' ? adminLabel : message.authorName || '访客' }} ·
                   {{ fmtRelative(message.sentAt) }}
                   <span v-if="message.direction === 'visitor' && message.pageTitle">
                     · 在「{{ message.pageTitle }}」
@@ -356,7 +358,7 @@ onUnmounted(() => {
             </div>
             <p class="os-chat__notice">提示：此功能仅为学习测试使用。</p>
           </div>
-          <p v-else class="os-chat__closed">点击「展开」可以和这个 IP 的访客实时对话。</p>
+          <p v-else class="os-chat__closed">点击「展开」可以和这个访客实时对话。</p>
         </section>
 
         <section class="os-section">
