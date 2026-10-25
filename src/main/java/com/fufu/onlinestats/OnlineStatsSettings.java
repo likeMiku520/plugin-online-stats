@@ -75,9 +75,15 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
      * Refuses the conversation endpoints over a plain connection, so chat text is never
      * carried in the clear. Sites whose reverse proxy does not report the original
      * scheme can turn it off.
+     * <p>Off by default. The server cannot reliably tell whether the visitor's own
+     * connection was encrypted: behind a proxy it only sees the internal hop, and the
+     * forwarding header that would describe the original request may be absent or say
+     * {@code http} even though every visitor is on HTTPS. Treating that as plaintext
+     * would silently cut the conversation off, so this guard is opt-in for deployments
+     * that know their proxy reports the scheme.</p>
      */
     public boolean chatRequireHttpsOrDefault() {
-        return chatRequireHttps == null || chatRequireHttps;
+        return chatRequireHttps != null && chatRequireHttps;
     }
 
     public String geoEndpointOrDefault() {

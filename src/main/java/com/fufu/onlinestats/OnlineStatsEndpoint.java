@@ -819,8 +819,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             request.headers().firstHeader(HttpHeaders.USER_AGENT));
     }
 
-    private static boolean rejectsPlaintext(ServerRequest request,
-                                            OnlineStatsSettings settings) {
+    /** Visible for tests: the guard must stay off unless the deployment asks for it. */
+    static boolean rejectsPlaintext(ServerRequest request,
+                                    OnlineStatsSettings settings) {
         return settings.chatRequireHttpsOrDefault() && !isSecure(request);
     }
 

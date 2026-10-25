@@ -163,7 +163,20 @@
    * put the card away for good until the next message arrives. */
   var chatSeq = 0;
   var chatSeeded = false;
+  var chatWarned = false;
   var chatMessages = [];
+
+  /* Console diagnostics only: a visitor never sees this, but the site owner looking at
+   * the browser console gets the exact reason the conversation is not working. */
+  function warn(message) {
+    try {
+      if (window.console && window.console.warn) {
+        window.console.warn('[online-stats] ' + message);
+      }
+    } catch (e) {
+      /* nothing to do */
+    }
+  }
   var chatUnread = 0;
   var chatSending = false;
   var chatOpen = false;
@@ -677,17 +690,35 @@
       return;
     }
     /* The first poll of a page never shows anything: it only learns where the thread
-     * stands, so a reload leaves nothing on screen until a new message arrives. */
+     * stands, so a reload leaves nothing on screen until a new message arrives. The
+     * flag is cleared before the request rather than after a successful one, so a
+     * refused or failed first poll can never swallow every later message. */
     var seeding = !chatSeeded;
+    chatSeeded = true;
     fetch(apiBase + 'chat-inbox?since=' + chatSeq, {
       headers: { Accept: 'application/json' }
     }).then(function (response) {
+      if (response.status === 403) {
+        return response.json().then(function (body) {
+          return { refused: true, hint: body && body.hint ? body.hint : '' };
+        }).catch(function () {
+          return { refused: true, hint: '' };
+        });
+      }
       return response.ok ? response.json() : null;
     }).then(function (data) {
+      if (data && data.refused) {
+        // Nothing is drawn for visitors; the site owner needs the reason though, and
+        // the console is where they will look.
+        if (!chatWarned) {
+          chatWarned = true;
+          warn('对话接口拒绝了这次查询：' + (data.hint || '403'));
+        }
+        return;
+      }
       if (!data || data.enabled === false) {
         return;
       }
-      chatSeeded = true;
       var list = data.messages || [];
       var incoming = 0;
       if (!seeding) {
