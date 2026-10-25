@@ -7,6 +7,17 @@
 (function () {
   'use strict';
 
+  /* Themes that swap pages through swup re-run this file on every navigation
+   * (SwupScriptsPlugin) and replace the document head, which drops the stylesheet it
+   * injected (SwupHeadPlugin). The tracker therefore lives once per document: a second
+   * execution refreshes the page reporting and repairs the widget instead of building
+   * a second card and a second launcher. */
+  var running = window.__ONLINE_STATS_TRACKER__;
+  if (running) {
+    running.resume();
+    return;
+  }
+
   var cfg = window.__ONLINE_STATS__ || {};
   var apiBase = location.origin + '/apis/online-stats.halo.run/v1alpha1/';
   var interval = cfg.heartbeatInterval > 0 ? cfg.heartbeatInterval : 15;
@@ -230,7 +241,7 @@
     style.id = 'oschat-style';
     style.textContent = [
       '.oschat-card{position:fixed;z-index:2147482000;display:flex;flex-direction:column;',
-      'box-sizing:border-box;overflow:hidden;background:#fff;color:#0f172a;',
+      'box-sizing:border-box;overflow:hidden;background:var(--card-bg,#fff);color:#0f172a;',
       'border-radius:.75rem;box-shadow:0 12px 40px rgba(15,23,42,.18);',
       'font-family:inherit;text-align:left}',
       '.oschat-card *{box-sizing:border-box}',
@@ -250,8 +261,9 @@
       '.oschat-msg{display:flex;gap:.5rem;align-items:flex-start;max-width:100%}',
       '.oschat-msg.is-me{justify-content:flex-end}',
       '.oschat-avatar{flex:none;display:flex;align-items:center;justify-content:center;',
-      'width:1.75rem;height:1.75rem;overflow:hidden;object-fit:cover;border-radius:9999px;',
-      'background:var(--primary,#39C5BB);color:#fff;font-size:.75rem;font-weight:600}',
+      'width:1.75rem;height:1.75rem;color:var(--primary,#39C5BB);',
+      'font-size:.875rem;font-weight:700;background:none}',
+      'img.oschat-avatar{display:block;object-fit:contain}',
       '.oschat-bubble{padding:.375rem .625rem;border-radius:.625rem;background:#f1f5f9}',
       '.oschat-name{margin-bottom:.125rem;font-size:.6875rem;color:#94a3b8}',
       '.oschat-text{margin:0;font-size:.8125rem;line-height:1.6;white-space:pre-wrap;',
@@ -269,13 +281,15 @@
       'color:#fff;cursor:pointer;background:var(--primary,#39C5BB);border:0;border-radius:.5rem}',
       '.oschat-send:disabled{cursor:not-allowed;opacity:.55}',
       '.oschat-note{display:none;padding:0 1rem .625rem;font-size:.6875rem;color:#dc2626}',
-      '.oschat-launcher{position:fixed;right:1rem;bottom:5.25rem;z-index:2147482001;',
-      'display:flex;align-items:center;justify-content:center;width:3.5rem;height:3.5rem;',
-      'padding:0;overflow:hidden;cursor:pointer;background:#fff;border:0;border-radius:1rem;',
-      'box-shadow:0 4px 16px rgba(15,23,42,.16);transition:transform .2s ease,box-shadow .2s ease}',
-      '.oschat-launcher:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(15,23,42,.22)}',
-      '.oschat-launcher img{width:100%;height:100%;object-fit:cover}',
-      '.oschat-launcher span{color:#0f172a;font-size:1.125rem;font-weight:600}',
+      /* Same surface as the theme's own floating buttons: a translucent card with a
+       * blurred backdrop, a primary coloured mark inside and a soft drop shadow. The
+       * geometry lives inline on the element so a missing stylesheet cannot blow it up. */
+      '.oschat-launcher{box-sizing:border-box;cursor:pointer;color:var(--primary,#39C5BB);',
+      'background-color:#ffffff9e;',
+      '-webkit-backdrop-filter:saturate(180%) blur(20px);backdrop-filter:saturate(180%) blur(20px);',
+      'box-shadow:0 4px 16px -4px #0000004d;transition:transform .2s ease,background-color .2s ease}',
+      '.oschat-launcher:active{transform:scale(.9)}',
+      '.oschat-launcher svg{display:block;width:1.75rem;height:1.75rem}',
       '.oschat-badge{position:absolute;top:-.25rem;right:-.25rem;min-width:1.125rem;',
       'height:1.125rem;padding:0 .25rem;font-size:.625rem;line-height:1.125rem;color:#fff;',
       'text-align:center;background:#ef4444;border-radius:9999px}',
@@ -286,9 +300,16 @@
       '@keyframes oschat-up{from{opacity:0;transform:translateY(1rem)}to{opacity:1;transform:none}}',
       '@keyframes oschat-down{from{opacity:0;transform:translateY(-100%)}',
       'to{opacity:1;transform:none}}',
-      '@media (prefers-color-scheme:dark){.oschat-card{background:#1e293b;color:#e2e8f0}',
-      '.oschat-launcher{background:#1e293b}',
-      '.oschat-launcher span{color:#e2e8f0}',
+      /* The blog toggles dark mode with a class on :root, so both signals are honoured. */
+      ':root.dark .oschat-card{background:var(--card-bg,#1e293b);color:#e2e8f0}',
+      ':root.dark .oschat-launcher{background-color:#000000a6}',
+      ':root.dark .oschat-bubble{background:rgba(255,255,255,.08)}',
+      ':root.dark .oschat-text{color:rgba(255,255,255,.72)}',
+      ':root.dark .oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
+      'border-color:rgba(255,255,255,.14)}',
+      ':root.dark .oschat-foot{border-top-color:rgba(255,255,255,.08)}',
+      '@media (prefers-color-scheme:dark){.oschat-card{background:var(--card-bg,#1e293b);',
+      'color:#e2e8f0}.oschat-launcher{background-color:#000000a6}',
       '.oschat-bubble{background:rgba(255,255,255,.08)}.oschat-text{color:rgba(255,255,255,.72)}',
       '.oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
       'border-color:rgba(255,255,255,.14)}.oschat-foot{border-top-color:rgba(255,255,255,.08)}}'
@@ -430,7 +451,10 @@
     }
   }
 
-  function openChat() {
+  /* focusInput is only set when the visitor opens the card themselves: a card that
+   * arrives on its own must not take the keyboard, which on a phone would open it
+   * over the page the visitor is reading. */
+  function openChat(focusInput) {
     injectChatStyle();
     if (!chatDom) {
       buildCard();
@@ -441,10 +465,12 @@
     renderThread();
     setNote('');
     renderLauncher();
-    try {
-      chatDom.input.focus({ preventScroll: true });
-    } catch (e) {
-      /* focus is best effort */
+    if (focusInput) {
+      try {
+        chatDom.input.focus({ preventScroll: true });
+      } catch (e) {
+        /* focus is best effort */
+      }
     }
   }
 
@@ -459,30 +485,66 @@
   var chatLauncher = null;
   var launcherMeasureAt = 0;
 
-  /**
-   * The launcher copies the theme's own floating back-to-top button: same size and
-   * corner radius, a card surface instead of a coloured disc. It is anchored above
-   * that button when the theme has one, so the two never overlap, and falls back to
-   * the usual bottom-right column when the button is hidden at the top of the page.
-   */
+  /* Fixed placement rather than a measured one: the widget must never depend on the
+   * stylesheet, which a theme page swap can remove at any moment. */
+  var LAUNCHER_SIZE = '3.5rem';
+  var NAVBAR_GAP = 20;
+  var EDGE_GAP = 16;
+
+  /* material-symbols:chat-outline-rounded, the same rounded outline set the theme
+   * uses for its own floating buttons. */
+  var CHAT_ICON_PATH =
+    'm6 18l-2.3 2.3q-.475.475-1.088.213T2 19.575V4q0-.825.588-1.412T4 2h16q.825 0 ' +
+    '1.413.588T22 4v12q0 .825-.587 1.413T20 18zm-.85-2H20V4H4v13.125zM4 16V4zm3-2h6q.425 ' +
+    '0 .713-.288T14 13t-.288-.712T13 12H7q-.425 0-.712.288T6 13t.288.713T7 14m0-3h10q.425 ' +
+    '0 .713-.288T18 10t-.288-.712T17 9H7q-.425 0-.712.288T6 10t.288.713T7 11m0-3h10q.425 ' +
+    '0 .713-.288T18 7t-.288-.712T17 6H7q-.425 0-.712.288T6 7t.288.713T7 8';
+
+  function chatIcon() {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    // Attributes keep the mark at its intended size even without the stylesheet.
+    svg.setAttribute('width', '28');
+    svg.setAttribute('height', '28');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    var path = document.createElementNS(ns, 'path');
+    path.setAttribute('fill', 'currentColor');
+    path.setAttribute('d', CHAT_ICON_PATH);
+    svg.appendChild(path);
+    return svg;
+  }
+
+  function navbarRect() {
+    var selectors = ['#navbar-card', '#navbar', '#navbar-wrapper', '.navbar', 'header'];
+    for (var i = 0; i < selectors.length; i++) {
+      var node = document.querySelector(selectors[i]);
+      if (!node || !node.getBoundingClientRect) {
+        continue;
+      }
+      var rect = node.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        return rect;
+      }
+    }
+    return null;
+  }
+
+  /* Top right corner, under the navigation bar and clear of it. */
   function positionLauncher() {
     if (!chatLauncher) {
       return;
     }
-    var size = 56;
-    var gap = 12;
-    var edge = 16;
-    var anchor = document.getElementById('back-to-top-btn');
-    var rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
-    if (rect && rect.width > 0 && rect.height > 0) {
-      var bottom = Math.max(edge, window.innerHeight - rect.top + gap);
-      var right = Math.max(edge, window.innerWidth - rect.right);
-      chatLauncher.style.bottom = bottom + 'px';
-      chatLauncher.style.right = right + 'px';
+    var rect = navbarRect();
+    if (rect && rect.bottom > 8 && rect.bottom < window.innerHeight * 0.6) {
+      chatLauncher.style.top = Math.round(rect.bottom + NAVBAR_GAP) + 'px';
+      chatLauncher.style.right = Math.max(12, Math.round(window.innerWidth - rect.right)) + 'px';
     } else {
-      chatLauncher.style.bottom = edge + size + gap + 'px';
-      chatLauncher.style.right = edge + 'px';
+      chatLauncher.style.top = '5.5rem';
+      chatLauncher.style.right = EDGE_GAP + 'px';
     }
+    chatLauncher.style.bottom = 'auto';
     chatLauncher.style.left = 'auto';
   }
 
@@ -507,18 +569,54 @@
       chatLauncher = chatElement('button', 'oschat-launcher');
       chatLauncher.type = 'button';
       chatLauncher.setAttribute('aria-label', '打开与博主的对话');
-      chatLauncher.addEventListener('click', openChat);
+      chatLauncher.addEventListener('click', function () {
+        openChat(true);
+      });
+      /* Layout that must survive a missing stylesheet: without it a theme head swap
+       * turns the avatar into a full page image. */
+      chatLauncher.style.position = 'fixed';
+      chatLauncher.style.zIndex = '40';
+      chatLauncher.style.width = LAUNCHER_SIZE;
+      chatLauncher.style.height = LAUNCHER_SIZE;
+      chatLauncher.style.padding = '0';
+      chatLauncher.style.border = '0';
+      chatLauncher.style.overflow = 'hidden';
+      chatLauncher.style.borderRadius = '1rem';
+      chatLauncher.style.alignItems = 'center';
+      chatLauncher.style.justifyContent = 'center';
       (document.body || document.documentElement).appendChild(chatLauncher);
       window.addEventListener('resize', remeasureLauncher);
       window.addEventListener('scroll', remeasureLauncher, { passive: true });
     }
     chatLauncher.textContent = '';
-    chatLauncher.appendChild(buildAvatar('oschat-launcher-avatar'));
+    chatLauncher.appendChild(chatIcon());
     if (chatUnread > 0) {
       chatLauncher.appendChild(chatElement('span', 'oschat-badge', String(chatUnread)));
     }
     chatLauncher.style.display = 'flex';
     positionLauncher();
+  }
+
+  /* Re-attaches the widget if a page swap moved the body out from under it. */
+  function reattachChatUi() {
+    var host = document.body || document.documentElement;
+    if (chatDom && chatDom.card && !chatDom.card.isConnected) {
+      host.appendChild(chatDom.card);
+    }
+    if (chatLauncher && !chatLauncher.isConnected) {
+      host.appendChild(chatLauncher);
+      positionLauncher();
+    }
+  }
+
+  /* Called by a second execution of this file after a theme page swap. */
+  function resume() {
+    heartbeat();
+    injectChatStyle();
+    reattachChatUi();
+    if (chatEnabled) {
+      pollChat();
+    }
   }
 
   function pushMessage(message) {
@@ -625,7 +723,7 @@
       }
       if (incoming > 0) {
         chatUnread += incoming;
-        openChat();
+        openChat(false);
       } else if (chatOpen) {
         renderThread();
       } else {
@@ -647,6 +745,14 @@
   window.setInterval(heartbeat, interval * 1000);
   if (chatEnabled) {
     pollChat();
-    window.setInterval(pollChat, chatPollSeconds * 1000);
+    window.setInterval(function () {
+      // The head is replaced on every theme page swap, which drops the stylesheet
+      // injected above; putting it back on each tick keeps the widget styled even if
+      // the swap happens in an order that skips resume().
+      injectChatStyle();
+      pollChat();
+    }, chatPollSeconds * 1000);
   }
+
+  window.__ONLINE_STATS_TRACKER__ = { resume: resume };
 })();
