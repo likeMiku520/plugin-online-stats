@@ -38,7 +38,8 @@ const chatDraft = ref('')
 const chatSending = ref(false)
 const chatError = ref('')
 const chatLoaded = ref(false)
-const chatEnabled = ref(true)
+/** null until the first reply from the server, so nothing flashes before it is known. */
+const chatEnabled = ref<boolean | null>(null)
 const listRef = ref<HTMLElement | null>(null)
 let scrollOnNextLoad = true
 const admin = ref<AdminInfo | null>(null)
@@ -260,7 +261,7 @@ onMounted(() => {
     openChat()
   }
   chatTimer = window.setInterval(() => {
-    if (chatOpen.value && !document.hidden) {
+    if (chatOpen.value && chatEnabled.value !== false && !document.hidden) {
       loadChat()
     }
   }, 4_000)
@@ -292,7 +293,7 @@ onUnmounted(() => {
       </header>
 
       <div class="os-drawer__body">
-        <section v-if="canChat" class="os-section os-chat">
+        <section v-if="canChat && chatEnabled === true" class="os-section os-chat">
           <h4>
             <span>给这位访客发消息</span>
             <button class="os-copy" type="button" @click="chatOpen ? closeChat() : openChat()">
@@ -301,10 +302,6 @@ onUnmounted(() => {
           </h4>
 
           <div v-if="chatOpen" class="os-chat__panel">
-            <p v-if="!chatEnabled" class="os-chat__notice">
-              即时通讯已在插件设置里关闭。打开后这里才能给访客发消息。
-            </p>
-
             <div class="os-chat__me">
               <img v-if="previewAvatar" class="os-chat__avatar" :src="previewAvatar" alt="" />
               <span v-else class="os-chat__avatar os-chat__avatar--fallback">
@@ -342,7 +339,6 @@ onUnmounted(() => {
               class="os-chat__input"
               rows="3"
               maxlength="1000"
-              :disabled="!chatEnabled"
               placeholder="输入要发送的文本内容，Ctrl / ⌘ + Enter 发送"
               @keydown="onDraftKeydown"
             />
@@ -352,7 +348,7 @@ onUnmounted(() => {
               <button
                 class="os-geo-btn"
                 type="button"
-                :disabled="!chatEnabled || chatSending || !chatDraft.trim()"
+                :disabled="chatSending || !chatDraft.trim()"
                 @click="send()"
               >
                 {{ chatSending ? '发送中…' : '发送' }}

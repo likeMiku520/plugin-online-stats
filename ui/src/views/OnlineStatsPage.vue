@@ -40,6 +40,7 @@ const keyword = ref('')
 const status = ref<'all' | 'online' | 'offline'>('all')
 const visitorType = ref<'human' | 'bot' | 'all'>('human')
 const sort = ref<'lastSeenAt' | 'firstSeenAt' | 'visits'>('lastSeenAt')
+const jumpTo = ref<string>('')
 const stats = ref<Stats>({
   online: 0,
   total: 0,
@@ -182,6 +183,25 @@ function setSort(value: 'lastSeenAt' | 'firstSeenAt' | 'visits') {
 function goPage(delta: number) {
   const next = page.value + delta
   if (next < 1 || next > totalPages.value) {
+    return
+  }
+  page.value = next
+  load()
+}
+
+/** Jumps to a typed page number, clamped to the range that actually exists. */
+function goToPage() {
+  const raw = typeof jumpTo.value === 'string' ? jumpTo.value.trim() : jumpTo.value
+  if (raw === '' || raw === null || raw === undefined) {
+    return
+  }
+  const target = Number(raw)
+  if (!Number.isFinite(target)) {
+    return
+  }
+  const next = Math.min(Math.max(Math.trunc(target), 1), totalPages.value)
+  jumpTo.value = ''
+  if (next === page.value) {
     return
   }
   page.value = next
@@ -485,6 +505,23 @@ onUnmounted(() => {
         <div class="os-pager__actions">
           <button type="button" :disabled="!canPrev" @click="goPage(-1)">上一页</button>
           <button type="button" :disabled="!canNext" @click="goPage(1)">下一页</button>
+          <span class="os-pager__jump">
+            <span>跳至</span>
+            <input
+              v-model="jumpTo"
+              class="os-pager__input"
+              type="number"
+              inputmode="numeric"
+              min="1"
+              :max="totalPages"
+              :placeholder="String(page)"
+              :disabled="totalPages <= 1"
+              aria-label="跳转到指定页码"
+              @keyup.enter="goToPage()"
+            />
+            <span>页</span>
+            <button type="button" :disabled="totalPages <= 1" @click="goToPage()">跳转</button>
+          </span>
         </div>
       </div>
     </div>
@@ -945,7 +982,9 @@ onUnmounted(() => {
 
   &__actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
+    align-items: center;
 
     button {
       padding: 0.25rem 0.625rem;
@@ -960,6 +999,34 @@ onUnmounted(() => {
         color: #d1d5db;
         cursor: not-allowed;
       }
+    }
+  }
+
+  &__jump {
+    display: flex;
+    gap: 0.3125rem;
+    align-items: center;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  &__input {
+    width: 3.25rem;
+    padding: 0.25rem 0.375rem;
+    font-size: 0.75rem;
+    color: #374151;
+    text-align: center;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.375rem;
+    outline: none;
+
+    &:focus {
+      border-color: #8ADDD6;
+    }
+
+    &:disabled {
+      background: #f9fafb;
+      cursor: not-allowed;
     }
   }
 }

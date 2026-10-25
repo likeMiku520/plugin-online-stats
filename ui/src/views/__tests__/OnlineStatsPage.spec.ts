@@ -134,4 +134,62 @@ describe('the visitor list', () => {
     expect(wrapper.find('.os-unread').exists()).toBe(false)
     expect(wrapper.find('.os-more').classes()).not.toContain('os-more--unread')
   })
+
+  it('jumps straight to a typed page number', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/records')) {
+        return Promise.resolve({
+          data: {
+            items: [record()],
+            total: 100,
+            stats: { online: 1, total: 100, todayNew: 1, loaded: true },
+          },
+        })
+      }
+      if (url.includes('/chat-conversations')) {
+        return Promise.resolve(conversations(0))
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+    expect(wrapper.find('.os-pager__info').text()).toContain('第 1/5 页')
+
+    await wrapper.find('.os-pager__input').setValue('4')
+    await wrapper.find('.os-pager__jump button').trigger('click')
+    await flushPromises()
+
+    const last = mocked.get.mock.calls.filter((call) => String(call[0]).includes('/records')).pop()
+    expect(last?.[1]?.params?.page).toBe(4)
+    expect(wrapper.find('.os-pager__info').text()).toContain('第 4/5 页')
+  })
+
+  it('clamps a typed page number to the pages that exist', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/records')) {
+        return Promise.resolve({
+          data: {
+            items: [record()],
+            total: 100,
+            stats: { online: 1, total: 100, todayNew: 1, loaded: true },
+          },
+        })
+      }
+      if (url.includes('/chat-conversations')) {
+        return Promise.resolve(conversations(0))
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    await wrapper.find('.os-pager__input').setValue('99')
+    await wrapper.find('.os-pager__jump button').trigger('click')
+    await flushPromises()
+
+    const last = mocked.get.mock.calls.filter((call) => String(call[0]).includes('/records')).pop()
+    expect(last?.[1]?.params?.page).toBe(5)
+  })
 })

@@ -159,7 +159,7 @@ describe('the console conversation panel', () => {
     expect(wrapper.find('.os-chat__input').attributes('disabled')).toBeUndefined()
   })
 
-  it('disables sending once the plugin setting turns the feature off', async () => {
+  it('hides the whole conversation section once the plugin setting turns it off', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/chat-messages')) {
         return Promise.resolve({
@@ -172,8 +172,10 @@ describe('the console conversation panel', () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    expect(wrapper.find('.os-chat__notice').text()).toContain('即时通讯已在插件设置里关闭')
-    expect(wrapper.find('.os-chat__input').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('.os-chat .os-geo-btn').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('.os-chat').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('给这位访客发消息')
+    expect(wrapper.text()).not.toContain('此功能仅为学习测试使用')
+    // The rest of the drawer still works.
+    expect(wrapper.find('.os-drawer__title').exists()).toBe(true)
   })
 })
