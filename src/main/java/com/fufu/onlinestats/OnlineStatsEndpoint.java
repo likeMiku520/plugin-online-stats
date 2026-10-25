@@ -730,6 +730,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             boolean showIp = settings.showIpInConsoleOrDefault();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("loaded", chatService.isLoaded());
+            payload.put("enabled", settings.chatEnabledOrDefault());
             payload.put("unreadTotal", chatService.unreadTotal());
             payload.put("items", chatService.conversations().stream()
                 .map(conversation -> toConversationView(conversation, showIp)).toList());
@@ -750,6 +751,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             boolean showIp = settings.showIpInConsoleOrDefault();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("ip", showIp ? ip : maskIp(ip));
+            payload.put("enabled", settings.chatEnabledOrDefault());
             payload.put("avatar", settings.chatAvatarOrDefault());
             payload.put("messages", chatService.thread(ip).stream()
                 .map(OnlineStatsEndpoint::toAdminChatView).toList());
@@ -766,24 +768,29 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             })
             .onErrorResume(e -> Mono.empty())
             .defaultIfEmpty(Map.of())
-            .flatMap(body -> {
+            .flatMap(body -> fetchSettings().flatMap(settings -> {
+                // The setting is the master switch for the whole feature, so a console
+                // that still has the page open cannot keep sending into a disabled one.
+                if (!settings.chatEnabledOrDefault()) {
+                    return ServerResponse.status(HttpStatus.FORBIDDEN)
+                        .bodyValue(Map.of("error", "chat disabled"));
+                }
                 String ip = str(body, "ip", MAX_SHORT);
                 String text = sanitizeChatText(str(body, "text", MAX_CHAT_TEXT));
                 if (ip == null || text == null) {
                     return ServerResponse.badRequest()
                         .bodyValue(Map.of("error", "missing ip or text"));
                 }
-                return fetchSettings().flatMap(settings ->
-                    chatService.resolveAdmin().flatMap(admin -> {
-                        ChatMessageService.ChatEntry entry = chatService.append(ip, null,
-                            "admin", text, admin.name(), settings.chatAvatarOrDefault(),
-                            null, null);
-                        Map<String, Object> payload = new LinkedHashMap<>();
-                        payload.put("ok", true);
-                        payload.put("seq", entry.seq());
-                        return ServerResponse.ok().bodyValue(payload);
-                    }));
-            });
+                return chatService.resolveAdmin().flatMap(admin -> {
+                    ChatMessageService.ChatEntry entry = chatService.append(ip, null,
+                        "admin", text, admin.name(), settings.chatAvatarOrDefault(),
+                        null, null);
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("ok", true);
+                    payload.put("seq", entry.seq());
+                    return ServerResponse.ok().bodyValue(payload);
+                });
+            }));
     }
 
     /**

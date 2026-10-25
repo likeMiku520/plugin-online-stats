@@ -38,6 +38,7 @@ const chatDraft = ref('')
 const chatSending = ref(false)
 const chatError = ref('')
 const chatLoaded = ref(false)
+const chatEnabled = ref(true)
 const admin = ref<AdminInfo | null>(null)
 /** Avatar visitors receive; a plugin setting, so it wins over the account avatar. */
 const chatAvatar = ref('')
@@ -179,6 +180,7 @@ async function loadChat() {
     })
     chatMessages.value = data.messages || []
     chatAvatar.value = data.avatar || ''
+    chatEnabled.value = data.enabled !== false
     chatLoaded.value = true
   } catch (e) {
     chatLoaded.value = true
@@ -267,6 +269,10 @@ onUnmounted(() => {
           </h4>
 
           <div v-if="chatOpen" class="os-chat__panel">
+            <p v-if="!chatEnabled" class="os-chat__notice">
+              即时通讯已在插件设置里关闭。打开后这里才能给访客发消息。
+            </p>
+
             <div class="os-chat__me">
               <img v-if="previewAvatar" class="os-chat__avatar" :src="previewAvatar" alt="" />
               <span v-else class="os-chat__avatar os-chat__avatar--fallback">
@@ -274,7 +280,7 @@ onUnmounted(() => {
               </span>
               <div class="os-chat__me-text">
                 <strong>{{ adminLabel }}</strong>
-                <span>对方看到的是你的头像和名字，以及下面这条消息。</span>
+                <span>对方看到的是 {{ adminLabel }} 的头像和名字，以及下面这条消息。</span>
               </div>
             </div>
 
@@ -304,6 +310,7 @@ onUnmounted(() => {
               class="os-chat__input"
               rows="3"
               maxlength="1000"
+              :disabled="!chatEnabled"
               placeholder="输入要发送的文本内容，Ctrl / ⌘ + Enter 发送"
               @keydown="onDraftKeydown"
             />
@@ -313,12 +320,13 @@ onUnmounted(() => {
               <button
                 class="os-geo-btn"
                 type="button"
-                :disabled="chatSending || !chatDraft.trim()"
+                :disabled="!chatEnabled || chatSending || !chatDraft.trim()"
                 @click="send()"
               >
                 {{ chatSending ? '发送中…' : '发送' }}
               </button>
             </div>
+            <p class="os-chat__notice">提示：此功能仅为学习测试使用。</p>
           </div>
           <p v-else class="os-chat__closed">点击「展开」可以和这个 IP 的访客实时对话。</p>
         </section>
@@ -859,6 +867,13 @@ onUnmounted(() => {
   &__closed {
     margin: 0;
     font-size: 0.75rem;
+    color: #9ca3af;
+  }
+
+  &__notice {
+    margin: 0;
+    font-size: 0.6875rem;
+    line-height: 1.6;
     color: #9ca3af;
   }
 }

@@ -124,6 +124,7 @@ window.__ONLINE_STATS__ = {
 ```json
 {
   "loaded": true,
+  "enabled": true,
   "unreadTotal": 2,
   "items": [
     {
@@ -152,6 +153,7 @@ window.__ONLINE_STATS__ = {
 ```json
 {
   "ip": "1.2.3.4",
+  "enabled": true,
   "avatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
   "messages": [
     {
@@ -186,6 +188,8 @@ window.__ONLINE_STATS__ = {
 消息上记录的作者名字来自当前登录账号（`uc.api.halo.run` 的当前用户），不由请求体决定，因此访客看到的身份无法被伪造；头像则固定取设置里的「对话卡片里显示的头像」（默认 `https://blog.fufu520.cn/upload/fufu_touming.webp`），与登录的是哪个账号无关。`GET /chat-messages` 返回的 `avatar` 就是这张头像。
 
 访客侧脚本用最新一条后台消息的头像渲染整条对话，所以同一条对话里不会出现两种头像。
+
+设置里的「即时通讯（后台给访客发消息）」是整个功能的总开关。关掉之后，`/chat-send`、`/chat-reply` 都会返回 `403`，`/chat-inbox` 返回空消息，两个后台读接口的 `enabled` 会变成 `false`。这个功能仅为学习测试使用。
 
 ## 权限边界
 
