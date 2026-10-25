@@ -43,6 +43,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     public static final String GROUP_VERSION = "online-stats.halo.run/v1alpha1";
 
     private static final int RATE_LIMIT_PER_MINUTE = 60;
+    private static final int CHAT_RATE_LIMIT_PER_MINUTE = 60;
     private static final long RATE_WINDOW_MS = 60_000L;
     private static final int MAX_RATE_BUCKETS = 10_000;
 
@@ -50,6 +51,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private static final int MAX_URL = 500;
     private static final int MAX_TITLE = 200;
     private static final int MAX_SHORT = 120;
+    private static final int MAX_CHAT_TEXT = ChatMessageService.MAX_TEXT_LENGTH;
+    private static final int CHAT_POLL_LIMIT = 50;
+    private static final int CHAT_POLL_SECONDS = 5;
 
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 100;
@@ -59,23 +63,27 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private final IpGeoService ipGeoService;
     private final StatsAggregationService statsService;
     private final StatisticsQueryService queryService;
+    private final ChatMessageService chatService;
     private final ReactiveSettingFetcher settingFetcher;
 
     private static final Logger log = LoggerFactory.getLogger(OnlineStatsEndpoint.class);
 
     private final Map<String, long[]> rateBuckets = new ConcurrentHashMap<>();
+    private final Map<String, long[]> chatRateBuckets = new ConcurrentHashMap<>();
 
     public OnlineStatsEndpoint(OnlineVisitorRegistry registry,
                                VisitorRecordService recordService,
                                IpGeoService ipGeoService,
                                StatsAggregationService statsService,
                                StatisticsQueryService queryService,
+                               ChatMessageService chatService,
                                ReactiveSettingFetcher settingFetcher) {
         this.registry = registry;
         this.recordService = recordService;
         this.ipGeoService = ipGeoService;
         this.statsService = statsService;
         this.queryService = queryService;
+        this.chatService = chatService;
         this.settingFetcher = settingFetcher;
     }
 
@@ -102,6 +110,11 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/statistics/sources", this::getSources)
             .GET("/statistics/sources/detail", this::getSourceDetail)
             .GET("/statistics/visitors/{visitorKey}", this::getVisitorDetail)
+            .GET("/chat-inbox", this::getChatInbox)
+            .POST("/chat-reply", this::postChatReply)
+            .GET("/chat-conversations", this::getChatConversations)
+            .GET("/chat-messages", this::getChatMessages)
+            .POST("/chat-send", this::postChatSend)
             .build();
     }
 
@@ -177,26 +190,35 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     private boolean isRateLimited(String ip) {
+        return isRateLimited(rateBuckets, ip, RATE_LIMIT_PER_MINUTE);
+    }
+
+    private boolean isChatRateLimited(String ip) {
+        return isRateLimited(chatRateBuckets, ip, CHAT_RATE_LIMIT_PER_MINUTE);
+    }
+
+    private static boolean isRateLimited(Map<String, long[]> buckets, String key, int limit) {
         long now = System.currentTimeMillis();
-        if (rateBuckets.size() > MAX_RATE_BUCKETS) {
-            rateBuckets.entrySet()
-                .removeIf(e -> now - e.getValue()[0] >= RATE_WINDOW_MS);
+        if (buckets.size() > MAX_RATE_BUCKETS) {
+            buckets.entrySet().removeIf(e -> now - e.getValue()[0] >= RATE_WINDOW_MS);
         }
-        long[] bucket = rateBuckets.compute(ip, (key, existing) -> {
+        long[] bucket = buckets.compute(key, (ignored, existing) -> {
             if (existing == null || now - existing[0] >= RATE_WINDOW_MS) {
                 return new long[] {now, 1};
             }
             existing[1]++;
             return existing;
         });
-        return bucket[1] > RATE_LIMIT_PER_MINUTE;
+        return bucket[1] > limit;
     }
 
     private Mono<ServerResponse> getScript(ServerRequest request) {
         return fetchSettings()
             .flatMap(settings -> {
                 String config = "window.__ONLINE_STATS__ = { heartbeatInterval: "
-                    + settings.heartbeatIntervalOrDefault() + " };\n";
+                    + settings.heartbeatIntervalOrDefault()
+                    + ", chatEnabled: " + settings.chatEnabledOrDefault()
+                    + ", chatPollSeconds: " + CHAT_POLL_SECONDS + " };\n";
                 String content = config + readScript();
                 return ServerResponse.ok()
                     .contentType(
@@ -288,17 +310,32 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             List<RecordView> pageItems = views.subList(from, to);
 
             Map<String, Object> stats = new LinkedHashMap<>();
-            stats.put("online", registry.count(timeout));
-            stats.put("total", total);
-            stats.put("todayNew", countToday(all));
+            int onlineHumans = 0;
+            int onlineBots = 0;
+            for (OnlineVisitor visitor : live) {
+                if (isBotVisitor(visitor)) {
+                    onlineBots++;
+                } else {
+                    onlineHumans++;
+                }
+            }
+            int[] today = todayCounts(all);
             int bots = 0;
             for (RecordView view : merged.values()) {
                 if (view.bot()) {
                     bots++;
                 }
             }
-            stats.put("bots", bots);
+            stats.put("online", live.size());
+            stats.put("onlineHumans", onlineHumans);
+            stats.put("onlineBots", onlineBots);
+            stats.put("total", total);
+            stats.put("historyTotal", merged.size());
             stats.put("humans", merged.size() - bots);
+            stats.put("bots", bots);
+            stats.put("todayNew", today[0] + today[1]);
+            stats.put("todayHumans", today[0]);
+            stats.put("todayBots", today[1]);
             stats.putAll(recordService.diagnostics());
 
             Map<String, Object> payload = new LinkedHashMap<>();
@@ -404,21 +441,39 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             && spec.getTimezone() == null && spec.getLanguage() == null;
     }
 
-    private static int countToday(List<VisitorRecord> records) {
+    /**
+     * A visitor counts as a bot when the User-Agent says so, or when the browser never
+     * reported the screen, timezone and language a real browser always sends.
+     */
+    private static boolean isBotVisitor(OnlineVisitor visitor) {
+        if (UaParser.isBot(visitor.getUserAgent())) {
+            return true;
+        }
+        return visitor.getScreen() == null && visitor.getViewport() == null
+            && visitor.getTimezone() == null && visitor.getLanguage() == null;
+    }
+
+    private static int[] todayCounts(List<VisitorRecord> records) {
         ZoneId zone = ZoneId.systemDefault();
         LocalDate today = LocalDate.now(zone);
-        int count = 0;
+        int humans = 0;
+        int bots = 0;
         for (VisitorRecord record : records) {
             Long firstSeen = record.getSpec().getFirstSeenAt();
             if (firstSeen == null) {
                 continue;
             }
             LocalDate date = Instant.ofEpochMilli(firstSeen).atZone(zone).toLocalDate();
-            if (today.equals(date)) {
-                count++;
+            if (!today.equals(date)) {
+                continue;
+            }
+            if (isBotRecord(record.getSpec())) {
+                bots++;
+            } else {
+                humans++;
             }
         }
-        return count;
+        return new int[] {humans, bots};
     }
 
     private static boolean matches(RecordView view, String keyword) {
@@ -505,9 +560,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
      * Builds a row straight from a live visitor that has not been persisted yet.
      */
     private RecordView toRecordView(OnlineVisitor visitor, boolean showIp) {
-        boolean bot = UaParser.isBot(visitor.getUserAgent())
-            || (visitor.getScreen() == null && visitor.getViewport() == null
-            && visitor.getTimezone() == null && visitor.getLanguage() == null);
+        boolean bot = isBotVisitor(visitor);
         String reason = null;
         if (bot) {
             reason = UaParser.isBot(visitor.getUserAgent())
@@ -616,6 +669,194 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .bodyValue(queryService.visitorDetail(visitorKey, settings)));
     }
 
+    /**
+     * Poll target of the tracker script. The address is taken from the request, never
+     * from a parameter, so one visitor can only ever read their own conversation.
+     */
+    private Mono<ServerResponse> getChatInbox(ServerRequest request) {
+        String ip = resolveClientIp(request);
+        if (isChatRateLimited(ip)) {
+            return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
+        long since = longValue(request.queryParam("since").orElse(null));
+        return fetchSettings().flatMap(settings -> {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            boolean enabled = settings.chatEnabledOrDefault();
+            payload.put("enabled", enabled);
+            if (!enabled) {
+                payload.put("messages", List.of());
+                payload.put("latestSeq", 0L);
+                return ServerResponse.ok().bodyValue(payload);
+            }
+            payload.put("messages", chatService.poll(ip, since, CHAT_POLL_LIMIT).stream()
+                .map(OnlineStatsEndpoint::toChatView).toList());
+            payload.put("latestSeq", chatService.latestSeq(ip));
+            return ServerResponse.ok().bodyValue(payload);
+        });
+    }
+
+    private Mono<ServerResponse> postChatReply(ServerRequest request) {
+        String ip = resolveClientIp(request);
+        if (isChatRateLimited(ip)) {
+            return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
+        String userAgent = request.headers().firstHeader(HttpHeaders.USER_AGENT);
+        return request.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+            })
+            .onErrorResume(e -> Mono.empty())
+            .defaultIfEmpty(Map.of())
+            .flatMap(body -> fetchSettings().flatMap(settings -> {
+                if (!settings.chatEnabledOrDefault()) {
+                    return ServerResponse.status(HttpStatus.FORBIDDEN)
+                        .bodyValue(Map.of("error", "chat disabled"));
+                }
+                String text = sanitizeChatText(str(body, "text", MAX_CHAT_TEXT));
+                if (text == null) {
+                    return ServerResponse.badRequest()
+                        .bodyValue(Map.of("error", "empty message"));
+                }
+                ChatMessageService.ChatEntry entry = chatService.append(ip,
+                    OnlineVisitorRegistry.deviceKey(ip, userAgent), "visitor", text, null,
+                    null, str(body, "url", MAX_URL), str(body, "title", MAX_TITLE));
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("ok", true);
+                payload.put("seq", entry.seq());
+                return ServerResponse.ok().bodyValue(payload);
+            }));
+    }
+
+    private Mono<ServerResponse> getChatConversations(ServerRequest request) {
+        return fetchSettings().flatMap(settings -> {
+            boolean showIp = settings.showIpInConsoleOrDefault();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("loaded", chatService.isLoaded());
+            payload.put("unreadTotal", chatService.unreadTotal());
+            payload.put("items", chatService.conversations().stream()
+                .map(conversation -> toConversationView(conversation, showIp)).toList());
+            return ServerResponse.ok().bodyValue(payload);
+        });
+    }
+
+    private Mono<ServerResponse> getChatMessages(ServerRequest request) {
+        String ip = request.queryParam("ip").orElse("").trim();
+        if (ip.isBlank()) {
+            return ServerResponse.badRequest().bodyValue(Map.of("error", "missing ip"));
+        }
+        boolean markRead = !"false".equals(request.queryParam("markRead").orElse("true"));
+        return fetchSettings().flatMap(settings -> {
+            if (markRead) {
+                chatService.markReadByAdmin(ip);
+            }
+            boolean showIp = settings.showIpInConsoleOrDefault();
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("ip", showIp ? ip : maskIp(ip));
+            payload.put("messages", chatService.thread(ip).stream()
+                .map(OnlineStatsEndpoint::toAdminChatView).toList());
+            return ServerResponse.ok().bodyValue(payload);
+        });
+    }
+
+    /**
+     * Writes a console message to one visitor address. The author shown to the visitor
+     * is resolved from the authenticated account, not from the request body.
+     */
+    private Mono<ServerResponse> postChatSend(ServerRequest request) {
+        return request.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+            })
+            .onErrorResume(e -> Mono.empty())
+            .defaultIfEmpty(Map.of())
+            .flatMap(body -> {
+                String ip = str(body, "ip", MAX_SHORT);
+                String text = sanitizeChatText(str(body, "text", MAX_CHAT_TEXT));
+                if (ip == null || text == null) {
+                    return ServerResponse.badRequest()
+                        .bodyValue(Map.of("error", "missing ip or text"));
+                }
+                return chatService.resolveAdmin().flatMap(admin -> {
+                    ChatMessageService.ChatEntry entry = chatService.append(ip, null,
+                        "admin", text, admin.name(), admin.avatar(), null, null);
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("ok", true);
+                    payload.put("seq", entry.seq());
+                    return ServerResponse.ok().bodyValue(payload);
+                });
+            });
+    }
+
+    /**
+     * Keeps a reply to plain text: control characters are dropped and the length is
+     * capped, so nothing that could be interpreted as markup survives the trip.
+     */
+    private static String sanitizeChatText(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String text = raw.replaceAll("[\\p{Cntrl}&&[^\\n\\r\\t]]", " ")
+            .replaceAll("\\n{3,}", "\n\n")
+            .trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        return text.length() > MAX_CHAT_TEXT ? text.substring(0, MAX_CHAT_TEXT) : text;
+    }
+
+    private static long longValue(String raw) {
+        if (raw == null) {
+            return 0L;
+        }
+        try {
+            long value = Long.parseLong(raw.trim());
+            return Math.max(value, 0L);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    private static Map<String, Object> toChatView(ChatMessageService.ChatEntry entry) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("seq", entry.seq());
+        view.put("direction", entry.direction());
+        view.put("text", entry.text());
+        view.put("sentAt", entry.sentAt());
+        view.put("adminName", entry.adminName());
+        view.put("adminAvatar", entry.adminAvatar());
+        return view;
+    }
+
+    private static Map<String, Object> toAdminChatView(ChatMessageService.ChatEntry entry) {
+        Map<String, Object> view = toChatView(entry);
+        view.put("visitorKey", entry.visitorKey());
+        view.put("pageUrl", entry.pageUrl());
+        view.put("pageTitle", entry.pageTitle());
+        view.put("readByAdmin", entry.readByAdmin());
+        return view;
+    }
+
+    private static Map<String, Object> toConversationView(
+        ChatMessageService.Conversation conversation, boolean showIp) {
+        ChatMessageService.ChatEntry last = conversation.last();
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("ip", showIp ? conversation.ip() : maskIp(conversation.ip()));
+        view.put("unread", conversation.unread());
+        view.put("total", conversation.total());
+        view.put("lastText", last.text());
+        view.put("lastDirection", last.direction());
+        view.put("lastAt", last.sentAt());
+        return view;
+    }
+
+    /** Hides the host part of an address when the console is configured to hide IPs. */
+    private static String maskIp(String ip) {
+        if (ip == null || ip.isBlank()) {
+            return "已隐藏";
+        }
+        int index = ip.lastIndexOf('.');
+        if (index <= 0) {
+            return ip.length() > 4 ? ip.substring(0, 4) + "***" : "已隐藏";
+        }
+        return ip.substring(0, index) + ".*";
+    }
+
     private String readScript() {
         try (InputStream is =
                  OnlineStatsEndpoint.class.getResourceAsStream("/static/online-stats.js")) {
@@ -630,7 +871,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
 
     private Mono<OnlineStatsSettings> fetchSettings() {
         return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null, null));
+            .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null,
+                null, null));
     }
 
     private String resolveClientIp(ServerRequest request) {

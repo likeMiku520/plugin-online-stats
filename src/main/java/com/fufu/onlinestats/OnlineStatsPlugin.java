@@ -19,6 +19,7 @@ public class OnlineStatsPlugin extends BasePlugin {
     private final OnlineVisitorRegistry registry;
     private final VisitorRecordService recordService;
     private final StatsAggregationService statsService;
+    private final ChatMessageService chatService;
     private final SchemeManager schemeManager;
     private final run.halo.app.plugin.ReactiveSettingFetcher settingFetcher;
     private ScheduledExecutorService scheduler;
@@ -26,12 +27,14 @@ public class OnlineStatsPlugin extends BasePlugin {
     public OnlineStatsPlugin(PluginContext pluginContext, OnlineVisitorRegistry registry,
                              VisitorRecordService recordService,
                              StatsAggregationService statsService,
+                             ChatMessageService chatService,
                              SchemeManager schemeManager,
                              run.halo.app.plugin.ReactiveSettingFetcher settingFetcher) {
         super(pluginContext);
         this.registry = registry;
         this.recordService = recordService;
         this.statsService = statsService;
+        this.chatService = chatService;
         this.schemeManager = schemeManager;
         this.settingFetcher = settingFetcher;
     }
@@ -41,8 +44,10 @@ public class OnlineStatsPlugin extends BasePlugin {
         schemeManager.register(VisitorRecord.class);
         schemeManager.register(ArticleStat.class);
         schemeManager.register(DailyStat.class);
+        schemeManager.register(ChatMessage.class);
         statsService.loadAll();
         recordService.start();
+        chatService.start();
         scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "online-stats-official");
             thread.setDaemon(true);
@@ -53,7 +58,7 @@ public class OnlineStatsPlugin extends BasePlugin {
                 statsService.refreshOfficialCounts();
                 settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
                     .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null,
-                        null, null, null))
+                        null, null, null, null))
                     .subscribe(settings -> statsService
                         .ensureAdjustment(settings.officialViewsAdjustmentOrDefault()));
             } catch (Exception ignored) {
@@ -69,10 +74,12 @@ public class OnlineStatsPlugin extends BasePlugin {
             scheduler = null;
         }
         recordService.stop();
+        chatService.stop();
         registry.clear();
         statsService.shutdown();
         schemeManager.unregister(Scheme.buildFromType(VisitorRecord.class));
         schemeManager.unregister(Scheme.buildFromType(ArticleStat.class));
         schemeManager.unregister(Scheme.buildFromType(DailyStat.class));
+        schemeManager.unregister(Scheme.buildFromType(ChatMessage.class));
     }
 }

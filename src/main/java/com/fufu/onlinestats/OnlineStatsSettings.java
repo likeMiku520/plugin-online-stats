@@ -10,7 +10,8 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Integer historyRetentionDays,
                                   Integer maxRecords,
                                   Long officialViewsAdjustment,
-                                  String siteHomepage) {
+                                  String siteHomepage,
+                                  Boolean chatEnabled) {
 
     public static final String GROUP = "basic";
 
@@ -37,6 +38,11 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
 
     public boolean showIpInConsoleOrDefault() {
         return showIpInConsole == null || showIpInConsole;
+    }
+
+    /** Turns the visitor side message popup and its polling off entirely. */
+    public boolean chatEnabledOrDefault() {
+        return chatEnabled == null || chatEnabled;
     }
 
     public String geoEndpointOrDefault() {

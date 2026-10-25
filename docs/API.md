@@ -58,6 +58,132 @@
 
 返回注入到主题 `<head>` 的 JavaScript，响应头带 `Cache-Control: no-store`。
 
+脚本开头注入的配置：
+
+```js
+window.__ONLINE_STATS__ = {
+  heartbeatInterval: 15,  // 心跳间隔（秒）
+  chatEnabled: true,      // 是否允许后台给访客发消息
+  chatPollSeconds: 5      // 对话轮询间隔（秒）
+};
+```
+
+## 访客轮询消息
+
+`GET /chat-inbox?since=<seq>`（公开）
+
+只能读到自己地址的对话：IP 由请求本身决定，不接受参数。页面不可见时脚本不会请求。
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| since | 0 | 已经收到的最大 `seq`，只返回比它新的消息 |
+
+`since=0` 表示这个浏览器第一次轮询，此时返回最近一批消息（最多 50 条）作为历史，脚本不会因此弹窗。
+
+```json
+{
+  "enabled": true,
+  "latestSeq": 12,
+  "messages": [
+    {
+      "seq": 12,
+      "direction": "admin",
+      "text": "你好，看到你在看这篇博客～",
+      "sentAt": 1760000000000,
+      "adminName": "fufu大王",
+      "adminAvatar": "https://blog.fufu520.cn/upload/avatar.png"
+    }
+  ]
+}
+```
+
+`direction` 为 `admin`（后台发出）或 `visitor`（访客回复）。同一地址每分钟超过 60 次返回 `429`。
+
+## 访客回复
+
+`POST /chat-reply`（公开）
+
+只接受纯文本，服务端会去掉控制字符、把连续空行压成一行、截断到 1000 字。
+
+| 字段 | 说明 |
+| --- | --- |
+| text | 回复内容，必填 |
+| url | 回复时所在页面，可选 |
+| title | 回复时页面标题，可选 |
+
+```json
+{ "ok": true, "seq": 13 }
+```
+
+关闭「允许在后台给访客发消息」后返回 `403`。
+
+## 对话列表
+
+`GET /chat-conversations`（管理员）
+
+```json
+{
+  "loaded": true,
+  "unreadTotal": 2,
+  "items": [
+    {
+      "ip": "1.2.3.4",
+      "unread": 2,
+      "total": 5,
+      "lastText": "在的",
+      "lastDirection": "visitor",
+      "lastAt": 1760000000000
+    }
+  ]
+}
+```
+
+关闭「后台显示访客 IP 地址」时，`ip` 只保留网段（`1.2.3.*`）。
+
+## 单个对话
+
+`GET /chat-messages?ip=<ip>`（管理员）
+
+| 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| ip | 必填 | 对话对应的访客地址 |
+| markRead | true | 是否把访客的回复标记为已读 |
+
+```json
+{
+  "ip": "1.2.3.4",
+  "messages": [
+    {
+      "seq": 12,
+      "direction": "admin",
+      "text": "你好",
+      "sentAt": 1760000000000,
+      "adminName": "fufu大王",
+      "adminAvatar": "https://blog.fufu520.cn/upload/avatar.png",
+      "visitorKey": null,
+      "pageUrl": null,
+      "pageTitle": null,
+      "readByAdmin": true
+    }
+  ]
+}
+```
+
+## 后台发送消息
+
+`POST /chat-send`（管理员）
+
+| 字段 | 说明 |
+| --- | --- |
+| ip | 目标访客地址，必填 |
+| text | 消息内容，必填，纯文本，最长 1000 字 |
+
+```json
+{ "ok": true, "seq": 12 }
+```
+
+消息上记录的作者名字与头像来自当前登录账号（`uc.api.halo.run` 的当前用户），不由请求体决定，因此访客看到的身份无法被伪造。
+
 ## 当前在线访客
 
 `GET /visitors`（管理员）
@@ -99,8 +225,13 @@
   "size": 20,
   "stats": {
     "online": 2,
+    "onlineHumans": 1,
+    "onlineBots": 1,
     "total": 12,
+    "historyTotal": 12,
     "todayNew": 5,
+    "todayHumans": 4,
+    "todayBots": 1,
     "bots": 3,
     "humans": 9,
     "loaded": true,

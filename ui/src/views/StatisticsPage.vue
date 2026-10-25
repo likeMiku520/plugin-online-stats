@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import axios from 'axios'
 import StatsChart, { type Point } from '../components/StatsChart.vue'
+import VisitorDetailDrawer from '../components/VisitorDetailDrawer.vue'
+import type { RecordView } from '../utils/visitor'
 
 interface Overview {
   views: number
@@ -63,8 +65,36 @@ const drill = ref<{
   subtitle: string
   loading: boolean
   kind: 'article' | 'source' | 'visitor' | ''
-  rows: { label: string; value: string; extra?: string; ip?: string | null }[]
+  rows: {
+    label: string
+    value: string
+    extra?: string
+    ip?: string | null
+    visitorKey?: string | null
+  }[]
 }>({ open: false, title: '', subtitle: '', loading: false, kind: '', rows: [] })
+
+const visitorDetail = ref<RecordView | null>(null)
+const visitorLoading = ref('')
+
+/**
+ * Opens the same visitor drawer the visitor list uses, from a bare visitor key, so a
+ * row of any list here can show everything known about that address.
+ */
+async function openVisitor(visitorKey: string | null | undefined) {
+  if (!visitorKey || visitorLoading.value) {
+    return
+  }
+  visitorLoading.value = visitorKey
+  try {
+    const { data } = await axios.get<RecordView>(`${api}/records/${visitorKey}`)
+    visitorDetail.value = data
+  } catch (e) {
+    /* the record may have been cleaned up already */
+  } finally {
+    visitorLoading.value = ''
+  }
+}
 
 const geoBusy = ref('')
 const geoCache = ref<Record<string, string>>({})
@@ -154,6 +184,7 @@ async function openArticle(postName: string, title: string | null) {
         value: `看了 ${v.views} 次`,
         extra: `停留 ${fmtDuration(v.durationMs)} · 最后 ${fmtTime(v.lastSeenAt)}`,
         ip: v.ip,
+        visitorKey: v.visitorKey,
       }),
     )
     const a = data.article
@@ -194,6 +225,7 @@ async function openSource(dimension: string, value: string) {
         value: `浏览 ${v.views} 次`,
         extra: v.ip ? undefined : v.visitorKey,
         ip: v.ip,
+        visitorKey: v.visitorKey,
       }),
     )
     drill.value = {
@@ -453,7 +485,19 @@ onUnmounted(() => {
           <div v-if="drill.loading" class="os-empty">加载中…</div>
           <ul v-else-if="drill.rows.length" class="os-detail">
             <li v-for="(row, index) in drill.rows" :key="index">
-              <span class="os-detail__label">{{ row.label }}</span>
+              <span class="os-detail__label">
+                {{ row.label }}
+                <button
+                  v-if="row.visitorKey"
+                  class="os-more"
+                  type="button"
+                  :disabled="visitorLoading === row.visitorKey"
+                  @click="openVisitor(row.visitorKey)"
+                >
+                  {{ visitorLoading === row.visitorKey ? '加载中' : '更多'
+                  }}<span class="os-more__arrow">›</span>
+                </button>
+              </span>
               <span class="os-detail__value">{{ row.value }}</span>
               <span v-if="row.extra" class="os-detail__extra">{{ row.extra }}</span>
               <span v-if="row.ip" class="os-detail__geo">
@@ -474,6 +518,12 @@ onUnmounted(() => {
         </div>
       </aside>
     </div>
+
+    <VisitorDetailDrawer
+      v-if="visitorDetail"
+      :record="visitorDetail"
+      @close="visitorDetail = null"
+    />
   </div>
 </template>
 
@@ -870,6 +920,9 @@ onUnmounted(() => {
   }
 
   &__label {
+    display: flex;
+    gap: 0.375rem;
+    align-items: baseline;
     color: #0f172a;
     font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
@@ -894,6 +947,32 @@ onUnmounted(() => {
   &__loc {
     font-size: 0.6875rem;
     color: #1b9c93;
+  }
+}
+
+/* Same affordance as the visitor list, so both pages open the detail the same way. */
+.os-more {
+  flex: none;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: #39c5bb;
+  cursor: pointer;
+  background: #e8f9f7;
+  border: 1px solid #b9e7e3;
+  border-radius: 0.25rem;
+
+  &:hover {
+    background: #b9e7e3;
+  }
+
+  &:disabled {
+    color: #8addd6;
+    cursor: wait;
+  }
+
+  &__arrow {
+    margin-left: 0.125rem;
   }
 }
 

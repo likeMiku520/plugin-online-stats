@@ -209,26 +209,30 @@ public class StatsAggregationService {
      * dedicated counter that belongs to no post, which keeps real articles honest while
      * still being summed by Halo's own site statistics.
      */
-    public void ensureAdjustment(long adjustment) {
+    public synchronized void ensureAdjustment(long adjustment) {
         if (adjustment == appliedAdjustment) {
             return;
         }
         appliedAdjustment = adjustment;
         client.fetch(Counter.class, ADJUSTMENT_COUNTER)
+            // Both branches have to emit a value: Mono#then() completes empty, and an
+            // empty completion would make switchIfEmpty run the create branch even
+            // though the counter had just been updated, which Halo rejects with 400
+            // "Duplicate name detected.".
             .flatMap(counter -> {
                 if (adjustment <= 0) {
-                    return client.delete(counter).then();
+                    return client.delete(counter).thenReturn(Boolean.TRUE);
                 }
                 counter.setVisit(toVisit(adjustment));
-                return client.update(counter).then();
+                return client.update(counter).thenReturn(Boolean.TRUE);
             })
             .switchIfEmpty(Mono.defer(() -> {
                 if (adjustment <= 0) {
-                    return Mono.empty();
+                    return Mono.just(Boolean.FALSE);
                 }
                 Counter counter = Counter.emptyCounter(ADJUSTMENT_COUNTER);
                 counter.setVisit(toVisit(adjustment));
-                return client.create(counter).then();
+                return client.create(counter).thenReturn(Boolean.TRUE);
             }))
             .subscribeOn(Schedulers.boundedElastic())
             .subscribe(unused -> {

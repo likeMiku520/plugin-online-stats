@@ -1,89 +1,26 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import axios from 'axios'
-
-interface UaInfo {
-  deviceType?: string
-  os?: string
-  osVersion?: string
-  browser?: string
-  browserVersion?: string
-  engine?: string
-  app?: string
-  bot?: string
-}
-
-interface RecordView {
-  name: string
-  ip: string | null
-  location: string | null
-  country: string | null
-  countryCode: string | null
-  region: string | null
-  city: string | null
-  districts: string | null
-  isp: string | null
-  net: string | null
-  idc: string | null
-  zipcode: string | null
-  areacode: string | null
-  protocol: string | null
-  dec: string | null
-  geoResolvedAt: number | null
-  userAgent: string | null
-  ua: UaInfo
-  bot: boolean
-  botReason: string | null
-  firstPageUrl: string | null
-  firstPageTitle: string | null
-  pageUrl: string | null
-  pageTitle: string | null
-  referer: string | null
-  firstReferer: string | null
-  firstSeenAt: number | null
-  lastSeenAt: number | null
-  visitCount: number | null
-  pageViewCount: number | null
-  totalOnlineMs: number | null
-  screen: string | null
-  viewport: string | null
-  timezone: string | null
-  language: string | null
-  platform: string | null
-  cpuCores: string | null
-  deviceMemory: string | null
-  connection: string | null
-  online: boolean
-}
-
-interface LocationView {
-  ip: string
-  dec: string | null
-  country: string | null
-  countryCode: string | null
-  province: string | null
-  city: string | null
-  districts: string | null
-  isp: string | null
-  net: string | null
-  idc: string | null
-  zipcode: string | null
-  areacode: string | null
-  protocol: string | null
-  location: string | null
-  resolvedAt: number
-  resolved: boolean
-  error: string | null
-  endpoint: string
-}
+import VisitorDetailDrawer from '../components/VisitorDetailDrawer.vue'
+import {
+  applyLocation,
+  type LocationView,
+  type RecordView,
+  type UaInfo,
+} from '../utils/visitor'
 
 interface Stats {
   online: number
+  onlineHumans?: number
+  onlineBots?: number
   total: number
-  todayNew: number
-  loaded: boolean
+  historyTotal?: number
   humans?: number
   bots?: number
+  todayNew: number
+  todayHumans?: number
+  todayBots?: number
+  loaded: boolean
   records?: number
   flushRuns?: number
   lastFlushAt?: number
@@ -114,10 +51,6 @@ const stats = ref<Stats>({
   lastError: null,
 })
 const detail = ref<RecordView | null>(null)
-const copied = ref('')
-const geoLoading = ref(false)
-const geoError = ref('')
-const geoEndpoint = ref('')
 const rowBusy = reactive<Record<string, boolean>>({})
 const rowError = reactive<Record<string, string>>({})
 
@@ -127,6 +60,7 @@ let searchTimer: number | undefined
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value)))
 const canPrev = computed(() => page.value > 1)
 const canNext = computed(() => page.value < totalPages.value)
+const historyTotal = computed(() => stats.value.historyTotal ?? (stats.value.humans ?? 0) + (stats.value.bots ?? 0))
 
 async function load() {
   loading.value = true
@@ -154,6 +88,8 @@ async function load() {
       lastError: null,
     }
     if (detail.value) {
+      // Keeps the online badge and the timestamps of an open drawer live; the drawer
+      // keeps its own copy of the fields it can change, such as the resolved location.
       const fresh = items.value.find((item) => item.name === detail.value?.name)
       if (fresh) {
         detail.value = fresh
@@ -164,50 +100,6 @@ async function load() {
   } finally {
     loading.value = false
   }
-}
-
-async function lookupLocation(force = false) {
-  if (!detail.value || geoLoading.value) {
-    return
-  }
-  if (!force && detail.value.geoResolvedAt) {
-    return
-  }
-  const name = detail.value.name
-  geoLoading.value = true
-  geoError.value = ''
-  try {
-    const { data } = await axios.get<LocationView>(`${api}/location`, {
-      params: { name },
-    })
-    geoEndpoint.value = data.endpoint || ''
-    if (!data.resolved) {
-      geoError.value = data.error || '接口没有返回有效属地'
-    }
-    await load()
-  } catch (e: any) {
-    const status = e?.response?.status
-    geoError.value = status === 403 ? '没有权限调用查询接口' : '查询失败，请稍后重试'
-  } finally {
-    geoLoading.value = false
-  }
-}
-
-function applyLocation(item: RecordView, data: LocationView) {
-  item.location = data.location
-  item.country = data.country
-  item.countryCode = data.countryCode
-  item.region = data.province
-  item.city = data.city
-  item.districts = data.districts
-  item.isp = data.isp
-  item.net = data.net
-  item.idc = data.idc
-  item.zipcode = data.zipcode
-  item.areacode = data.areacode
-  item.protocol = data.protocol
-  item.dec = data.dec
-  item.geoResolvedAt = data.resolvedAt
 }
 
 async function lookupRow(item: RecordView) {
@@ -270,13 +162,11 @@ function goPage(delta: number) {
 }
 
 function openDetail(item: RecordView) {
-  geoError.value = ''
   detail.value = item
 }
 
 function closeDetail() {
   detail.value = null
-  geoError.value = ''
 }
 
 function pad(value: number): string {
@@ -310,23 +200,6 @@ function fmtRelative(ms: number | null): string {
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
 
-function fmtDuration(ms: number | null): string {
-  if (!ms || ms <= 0) {
-    return '—'
-  }
-  const seconds = Math.floor(ms / 1000)
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = seconds % 60
-  if (h > 0) {
-    return `${h} 小时 ${m} 分`
-  }
-  if (m > 0) {
-    return `${m} 分 ${s} 秒`
-  }
-  return `${s} 秒`
-}
-
 function deviceIcon(ua: UaInfo): string {
   if (ua.deviceType === '手机') {
     return '📱'
@@ -347,21 +220,6 @@ function deviceSummary(item: RecordView): string {
     return '未知设备'
   }
   return parts.join(' · ')
-}
-
-async function copy(text: string | null, tag: string) {
-  if (!text) {
-    return
-  }
-  try {
-    await navigator.clipboard.writeText(text)
-    copied.value = tag
-    window.setTimeout(() => {
-      copied.value = ''
-    }, 1500)
-  } catch (e) {
-    /* clipboard unavailable */
-  }
 }
 
 watch([page, size], () => load())
@@ -397,22 +255,25 @@ onUnmounted(() => {
       <div class="os-stat">
         <span class="os-stat__label">当前在线</span>
         <span class="os-stat__value os-stat__value--online">{{ stats.online }}</span>
+        <span class="os-stat__split">
+          <span class="os-stat__part">真人 {{ stats.onlineHumans ?? 0 }}</span>
+          <span class="os-stat__part os-stat__part--bot">机器人 {{ stats.onlineBots ?? 0 }}</span>
+        </span>
       </div>
       <div class="os-stat">
         <span class="os-stat__label">历史访客</span>
-        <span class="os-stat__value">{{ stats.humans ?? stats.total }}</span>
+        <span class="os-stat__value">{{ historyTotal }}</span>
+        <span class="os-stat__split">
+          <span class="os-stat__part">真人 {{ stats.humans ?? 0 }}</span>
+          <span class="os-stat__part os-stat__part--bot">机器人 {{ stats.bots ?? 0 }}</span>
+        </span>
       </div>
       <div class="os-stat">
         <span class="os-stat__label">今日新增</span>
         <span class="os-stat__value">{{ stats.todayNew }}</span>
-      </div>
-      <div class="os-stat">
-        <span class="os-stat__label">记录状态</span>
-        <span class="os-stat__value os-stat__value--small">
-          {{ stats.loaded ? '已加载' : '加载中' }}
-        </span>
-        <span class="os-stat__hint">
-          落库 {{ stats.saved ?? 0 }} · 失败 {{ stats.failed ?? 0 }}
+        <span class="os-stat__split">
+          <span class="os-stat__part">真人 {{ stats.todayHumans ?? 0 }}</span>
+          <span class="os-stat__part os-stat__part--bot">机器人 {{ stats.todayBots ?? 0 }}</span>
         </span>
       </div>
     </div>
@@ -579,190 +440,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="detail" class="os-drawer-mask" @click.self="closeDetail">
-      <aside class="os-drawer">
-        <header class="os-drawer__head">
-          <div>
-            <h3 class="os-drawer__title">
-              访客详情
-              <span class="os-badge" :class="detail.online ? 'os-badge--online' : ''">
-                {{ detail.online ? '在线' : '离线' }}
-              </span>
-            </h3>
-            <p class="os-drawer__sub">
-              {{ detail.ip || '已隐藏' }} · {{ detail.location || '未查询属地' }}
-            </p>
-          </div>
-          <button class="os-drawer__close" type="button" @click="closeDetail">×</button>
-        </header>
-
-        <div class="os-drawer__body">
-          <section class="os-section">
-            <h4>
-              IP 属地
-              <button
-                v-if="detail.geoResolvedAt"
-                class="os-copy"
-                type="button"
-                :disabled="geoLoading"
-                @click="lookupLocation(true)"
-              >
-                {{ geoLoading ? '查询中…' : '重新查询' }}
-              </button>
-            </h4>
-
-            <div v-if="geoError" class="os-geo-error">
-              {{ geoError }}
-              <div v-if="geoEndpoint" class="os-geo-endpoint">接口：{{ geoEndpoint }}</div>
-            </div>
-
-            <dl v-if="detail.geoResolvedAt" class="os-kv">
-              <dt>整体属地</dt>
-              <dd>{{ detail.location || '—' }}</dd>
-              <dt>国家 / 地区</dt>
-              <dd>
-                {{ detail.country || '—' }}
-                <span v-if="detail.countryCode" class="os-muted">({{ detail.countryCode }})</span>
-              </dd>
-              <dt>省份</dt>
-              <dd>{{ detail.region || '—' }}</dd>
-              <dt>城市</dt>
-              <dd>{{ detail.city || '—' }}</dd>
-              <dt>区县</dt>
-              <dd>{{ detail.districts || '—' }}</dd>
-              <dt>运营商</dt>
-              <dd>{{ detail.isp || '—' }}</dd>
-              <dt>网络类型</dt>
-              <dd>{{ detail.net || '—' }}</dd>
-              <dt>IDC / 机房</dt>
-              <dd>{{ detail.idc || '—' }}</dd>
-              <dt>邮编</dt>
-              <dd>{{ detail.zipcode || '—' }}</dd>
-              <dt>区号</dt>
-              <dd>{{ detail.areacode || '—' }}</dd>
-              <dt>IP 协议</dt>
-              <dd>{{ detail.protocol || '—' }}</dd>
-              <dt>十进制 IP</dt>
-              <dd>{{ detail.dec || '—' }}</dd>
-              <dt>查询时间</dt>
-              <dd>{{ fmtTime(detail.geoResolvedAt) }}</dd>
-            </dl>
-
-            <div v-else class="os-geo-empty">
-              <p>该访客还没有查询过 IP 属地。</p>
-              <button class="os-geo-btn" type="button" :disabled="geoLoading" @click="lookupLocation()">
-                {{ geoLoading ? '查询中…' : '查询属地' }}
-              </button>
-              <p class="os-geo-hint">插件不会自动查询，点击后才会请求一次接口并保存结果。</p>
-            </div>
-          </section>
-
-          <section class="os-section">
-            <h4>IP 与网络</h4>
-            <dl class="os-kv">
-              <dt>IP 地址</dt>
-              <dd>
-                {{ detail.ip || '已隐藏' }}
-                <button v-if="detail.ip" class="os-copy" type="button" @click="copy(detail.ip, 'ip')">
-                  {{ copied === 'ip' ? '已复制' : '复制' }}
-                </button>
-                <button
-                  v-if="detail.ip && !detail.geoResolvedAt"
-                  class="os-copy"
-                  type="button"
-                  :disabled="geoLoading"
-                  @click="lookupLocation()"
-                >
-                  {{ geoLoading ? '查询中…' : '查属地' }}
-                </button>
-              </dd>
-            </dl>
-          </section>
-
-          <section class="os-section">
-            <h4>设备信息</h4>
-            <dl class="os-kv">
-              <dt>访客类型</dt>
-              <dd>
-                <span class="os-badge" :class="detail.bot ? 'os-badge--bot' : 'os-badge--online'">
-                  {{ detail.bot ? '机器人' : '真人' }}
-                </span>
-                <span v-if="detail.botReason" class="os-muted">{{ detail.botReason }}</span>
-              </dd>
-              <dt>设备类型</dt>
-              <dd>{{ detail.ua.deviceType || '—' }}</dd>
-              <dt>操作系统</dt>
-              <dd>
-                {{ detail.ua.os || '—' }}{{ detail.ua.osVersion ? ' ' + detail.ua.osVersion : '' }}
-              </dd>
-              <dt>浏览器</dt>
-              <dd>
-                {{ detail.ua.browser || '—'
-                }}{{ detail.ua.browserVersion ? ' ' + detail.ua.browserVersion : '' }}
-              </dd>
-              <dt>内核</dt>
-              <dd>{{ detail.ua.engine || '—' }}</dd>
-              <dt>内置应用</dt>
-              <dd>{{ detail.ua.app || '—' }}</dd>
-              <dt>平台</dt>
-              <dd>{{ detail.platform || '—' }}</dd>
-              <dt>屏幕分辨率</dt>
-              <dd>{{ detail.screen || '—' }}</dd>
-              <dt>窗口尺寸</dt>
-              <dd>{{ detail.viewport || '—' }}</dd>
-              <dt>语言</dt>
-              <dd>{{ detail.language || '—' }}</dd>
-              <dt>时区</dt>
-              <dd>{{ detail.timezone || '—' }}</dd>
-              <dt>CPU 核心</dt>
-              <dd>{{ detail.cpuCores || '—' }}</dd>
-              <dt>设备内存</dt>
-              <dd>{{ detail.deviceMemory || '—' }}</dd>
-              <dt>网络类型</dt>
-              <dd>{{ detail.connection || '—' }}</dd>
-            </dl>
-          </section>
-
-          <section class="os-section">
-            <h4>访问行为</h4>
-            <dl class="os-kv">
-              <dt>首次访问</dt>
-              <dd>{{ fmtTime(detail.firstSeenAt) }}</dd>
-              <dt>最后活跃</dt>
-              <dd>{{ fmtTime(detail.lastSeenAt) }}</dd>
-              <dt>累计在线</dt>
-              <dd>{{ fmtDuration(detail.totalOnlineMs) }}</dd>
-              <dt>访问次数</dt>
-              <dd>{{ detail.visitCount || 0 }} 次</dd>
-              <dt>浏览页面数</dt>
-              <dd>{{ detail.pageViewCount || 0 }} 个</dd>
-              <dt>入口页面</dt>
-              <dd>{{ detail.firstPageTitle || '—' }}</dd>
-              <dt>入口地址</dt>
-              <dd class="os-break">{{ detail.firstPageUrl || '—' }}</dd>
-              <dt>当前页面</dt>
-              <dd>{{ detail.pageTitle || '—' }}</dd>
-              <dt>当前地址</dt>
-              <dd class="os-break">{{ detail.pageUrl || '—' }}</dd>
-              <dt>来源页面</dt>
-              <dd class="os-break">{{ detail.referer || '直接访问' }}</dd>
-              <dt>首次来源</dt>
-              <dd class="os-break">{{ detail.firstReferer || '直接访问' }}</dd>
-            </dl>
-          </section>
-
-          <section class="os-section">
-            <h4>
-              原始 User-Agent
-              <button class="os-copy" type="button" @click="copy(detail.userAgent, 'ua')">
-                {{ copied === 'ua' ? '已复制' : '复制' }}
-              </button>
-            </h4>
-            <code class="os-ua">{{ detail.userAgent || '—' }}</code>
-          </section>
-        </div>
-      </aside>
-    </div>
+    <VisitorDetailDrawer v-if="detail" :record="detail" @close="closeDetail" />
   </div>
 </template>
 
@@ -841,17 +519,26 @@ onUnmounted(() => {
     &--online {
       color: #1B9C93;
     }
-
-    &--small {
-      font-size: 0.9375rem;
-      font-weight: 600;
-      color: #4b5563;
-    }
   }
 
-  &__hint {
+  &__split {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.375rem;
+  }
+
+  &__part {
+    padding: 0 0.375rem;
     font-size: 0.6875rem;
-    color: #9ca3af;
+    line-height: 1.5;
+    color: #167A72;
+    background: #D8F4F1;
+    border-radius: 0.25rem;
+
+    &--bot {
+      color: #4b5563;
+      background: #f3f4f6;
+    }
   }
 }
 
@@ -1179,191 +866,6 @@ onUnmounted(() => {
   }
 }
 
-.os-drawer-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 90;
-  background: rgb(17 24 39 / 0.35);
-}
-
-.os-drawer {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  width: min(30rem, 92vw);
-  background: #fff;
-  box-shadow: -8px 0 30px rgb(0 0 0 / 0.12);
-
-  &__head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    padding: 1rem 1.25rem;
-    border-bottom: 1px solid #f3f4f6;
-  }
-
-  &__title {
-    display: flex;
-    gap: 0.375rem;
-    align-items: center;
-    margin: 0;
-    font-size: 1rem;
-    font-weight: 600;
-    color: #111827;
-  }
-
-  &__sub {
-    margin: 0.25rem 0 0;
-    font-size: 0.75rem;
-    color: #6b7280;
-  }
-
-  &__close {
-    padding: 0 0.25rem;
-    font-size: 1.25rem;
-    line-height: 1;
-    color: #9ca3af;
-    cursor: pointer;
-    background: transparent;
-    border: none;
-
-    &:hover {
-      color: #4b5563;
-    }
-  }
-
-  &__body {
-    flex: 1;
-    padding: 0.75rem 1.25rem 2rem;
-    overflow-y: auto;
-  }
-}
-
-.os-section {
-  padding: 0.75rem 0;
-  border-bottom: 1px solid #f3f4f6;
-
-  &:last-child {
-    border-bottom: none;
-  }
-
-  h4 {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    margin: 0 0 0.5rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: #111827;
-  }
-}
-
-.os-kv {
-  display: grid;
-  grid-template-columns: 6rem 1fr;
-  gap: 0.375rem 0.75rem;
-  margin: 0;
-  font-size: 0.75rem;
-
-  dt {
-    color: #6b7280;
-  }
-
-  dd {
-    margin: 0;
-    color: #111827;
-    overflow-wrap: anywhere;
-  }
-}
-
-.os-break {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
-  color: #4b5563;
-}
-
-.os-ua {
-  display: block;
-  padding: 0.5rem 0.625rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6875rem;
-  line-height: 1.6;
-  color: #374151;
-  word-break: break-all;
-  background: #f9fafb;
-  border-radius: 0.375rem;
-}
-
-.os-copy {
-  padding: 0 0.375rem;
-  font-size: 0.6875rem;
-  color: #39C5BB;
-  cursor: pointer;
-  background: #E8F9F7;
-  border: 1px solid #B9E7E3;
-  border-radius: 0.25rem;
-
-  &:disabled {
-    color: #8ADDD6;
-    cursor: wait;
-  }
-}
-
-.os-geo-empty {
-  padding: 0.75rem;
-  font-size: 0.75rem;
-  color: #6b7280;
-  text-align: center;
-  background: #f9fafb;
-  border: 1px dashed #e5e7eb;
-  border-radius: 0.5rem;
-
-  p {
-    margin: 0 0 0.5rem;
-  }
-}
-
-.os-geo-btn {
-  padding: 0.375rem 0.875rem;
-  font-size: 0.8125rem;
-  color: #fff;
-  cursor: pointer;
-  background: #39C5BB;
-  border: none;
-  border-radius: 0.375rem;
-
-  &:disabled {
-    background: #8ADDD6;
-    cursor: wait;
-  }
-}
-
-.os-geo-hint {
-  margin: 0.5rem 0 0;
-  font-size: 0.6875rem;
-  color: #9ca3af;
-}
-
-.os-geo-error {
-  padding: 0.5rem 0.625rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.75rem;
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 0.375rem;
-}
-
-.os-geo-endpoint {
-  margin-top: 0.25rem;
-  font-size: 0.6875rem;
-  color: #9ca3af;
-  word-break: break-all;
-}
-
 /* Narrow screens: stack the toolbar, let the table scroll instead of squashing. */
 @media (max-width: 768px) {
   .os-page {
@@ -1403,10 +905,6 @@ onUnmounted(() => {
       padding: 0.375rem 0.5rem;
       font-size: 0.75rem;
     }
-  }
-
-  .os-drawer {
-    width: 100%;
   }
 }
 </style>

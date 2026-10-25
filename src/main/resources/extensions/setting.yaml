@@ -36,6 +36,11 @@ spec:
           label: 后台显示访客 IP 地址
           help: 关闭后后台不再展示访客 IP，保护访客隐私。
           value: true
+        - $formkit: checkbox
+          name: chatEnabled
+          label: 允许在后台给访客发消息
+          help: 打开后，前台页面会每 5 秒查询一次新消息。你在「访客明细」里点某个 IP 的「更多」，就能直接给这个 IP 的访客发消息，对方的页面上会弹出一个对话卡片并能回复你。关闭后前台不再有任何对话相关的请求。
+          value: true
         - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口
