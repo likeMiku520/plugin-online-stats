@@ -750,6 +750,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             boolean showIp = settings.showIpInConsoleOrDefault();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("ip", showIp ? ip : maskIp(ip));
+            payload.put("avatar", settings.chatAvatarOrDefault());
             payload.put("messages", chatService.thread(ip).stream()
                 .map(OnlineStatsEndpoint::toAdminChatView).toList());
             return ServerResponse.ok().bodyValue(payload);
@@ -772,14 +773,16 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                     return ServerResponse.badRequest()
                         .bodyValue(Map.of("error", "missing ip or text"));
                 }
-                return chatService.resolveAdmin().flatMap(admin -> {
-                    ChatMessageService.ChatEntry entry = chatService.append(ip, null,
-                        "admin", text, admin.name(), admin.avatar(), null, null);
-                    Map<String, Object> payload = new LinkedHashMap<>();
-                    payload.put("ok", true);
-                    payload.put("seq", entry.seq());
-                    return ServerResponse.ok().bodyValue(payload);
-                });
+                return fetchSettings().flatMap(settings ->
+                    chatService.resolveAdmin().flatMap(admin -> {
+                        ChatMessageService.ChatEntry entry = chatService.append(ip, null,
+                            "admin", text, admin.name(), settings.chatAvatarOrDefault(),
+                            null, null);
+                        Map<String, Object> payload = new LinkedHashMap<>();
+                        payload.put("ok", true);
+                        payload.put("seq", entry.seq());
+                        return ServerResponse.ok().bodyValue(payload);
+                    }));
             });
     }
 
@@ -872,7 +875,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private Mono<OnlineStatsSettings> fetchSettings() {
         return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
             .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null, null, null,
-                null, null));
+                null, null, null));
     }
 
     private String resolveClientIp(ServerRequest request) {

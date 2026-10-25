@@ -42,6 +42,11 @@ spec:
           help: 打开后，前台页面会每 5 秒查询一次新消息。你在「访客明细」里点某个 IP 的「更多」，就能直接给这个 IP 的访客发消息，对方的页面上会弹出一个对话卡片并能回复你。关闭后前台不再有任何对话相关的请求。
           value: true
         - $formkit: text
+          name: chatAvatar
+          label: 对话卡片里显示的头像
+          help: 访客看到的对话卡片和消息都用这个头像。留空或不是完整网址时使用默认头像。
+          value: "https://blog.fufu520.cn/upload/fufu_touming.webp"
+        - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口
           help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在点击「查询属地」时才请求。

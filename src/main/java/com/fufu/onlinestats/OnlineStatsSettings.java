@@ -11,9 +11,14 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Integer maxRecords,
                                   Long officialViewsAdjustment,
                                   String siteHomepage,
-                                  Boolean chatEnabled) {
+                                  Boolean chatEnabled,
+                                  String chatAvatar) {
 
     public static final String GROUP = "basic";
+
+    /** Avatar every visitor sees on a console message when none is configured. */
+    public static final String DEFAULT_CHAT_AVATAR =
+        "https://blog.fufu520.cn/upload/fufu_touming.webp";
 
     /**
      * Manual correction added to the official view total. Useful when the blog was
@@ -43,6 +48,20 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     /** Turns the visitor side message popup and its polling off entirely. */
     public boolean chatEnabledOrDefault() {
         return chatEnabled == null || chatEnabled;
+    }
+
+    /**
+     * Avatar painted on every message the visitor's popup shows. Configured rather
+     * than read from the account, so the picture visitors see stays the same one even
+     * when the signed-in administrator changes.
+     */
+    public String chatAvatarOrDefault() {
+        if (chatAvatar == null || chatAvatar.isBlank()) {
+            return DEFAULT_CHAT_AVATAR;
+        }
+        String value = chatAvatar.trim();
+        return value.startsWith("https://") || value.startsWith("http://")
+            ? value : DEFAULT_CHAT_AVATAR;
     }
 
     public String geoEndpointOrDefault() {

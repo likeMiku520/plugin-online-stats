@@ -58,7 +58,7 @@ public class OnlineStatsPlugin extends BasePlugin {
                 statsService.refreshOfficialCounts();
                 settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
                     .defaultIfEmpty(new OnlineStatsSettings(null, null, null, null, null,
-                        null, null, null, null))
+                        null, null, null, null, null))
                     .subscribe(settings -> statsService
                         .ensureAdjustment(settings.officialViewsAdjustmentOrDefault()));
             } catch (Exception ignored) {

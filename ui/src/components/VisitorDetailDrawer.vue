@@ -39,6 +39,8 @@ const chatSending = ref(false)
 const chatError = ref('')
 const chatLoaded = ref(false)
 const admin = ref<AdminInfo | null>(null)
+/** Avatar visitors receive; a plugin setting, so it wins over the account avatar. */
+const chatAvatar = ref('')
 
 let chatTimer: number | undefined
 
@@ -47,6 +49,7 @@ const canChat = computed(() => !!chatIp.value)
 
 const adminLabel = computed(() => admin.value?.displayName || admin.value?.name || '当前管理员')
 const adminInitial = computed(() => adminLabel.value.slice(0, 1))
+const previewAvatar = computed(() => chatAvatar.value || admin.value?.avatar || '')
 
 watch(
   () => props.record,
@@ -175,6 +178,7 @@ async function loadChat() {
       params: { ip: chatIp.value },
     })
     chatMessages.value = data.messages || []
+    chatAvatar.value = data.avatar || ''
     chatLoaded.value = true
   } catch (e) {
     chatLoaded.value = true
@@ -264,7 +268,7 @@ onUnmounted(() => {
 
           <div v-if="chatOpen" class="os-chat__panel">
             <div class="os-chat__me">
-              <img v-if="admin?.avatar" class="os-chat__avatar" :src="admin.avatar" alt="" />
+              <img v-if="previewAvatar" class="os-chat__avatar" :src="previewAvatar" alt="" />
               <span v-else class="os-chat__avatar os-chat__avatar--fallback">
                 {{ adminInitial }}
               </span>

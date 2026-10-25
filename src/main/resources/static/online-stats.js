@@ -215,6 +215,13 @@
     return message && message.adminName ? message.adminName : '博主';
   }
 
+  /* One author writes the whole thread, so every message is drawn with the same
+   avatar instead of mixing whatever each message happened to carry. */
+  function adminAvatar() {
+    var message = lastAdminMessage();
+    return message && message.adminAvatar ? String(message.adminAvatar) : '';
+  }
+
   function injectChatStyle() {
     if (document.getElementById('oschat-style')) {
       return;
@@ -261,14 +268,14 @@
       '.oschat-send{flex:none;padding:.5rem .875rem;font-family:inherit;font-size:.8125rem;',
       'color:#fff;cursor:pointer;background:var(--primary,#39C5BB);border:0;border-radius:.5rem}',
       '.oschat-send:disabled{cursor:not-allowed;opacity:.55}',
-      '.oschat-note{padding:0 1rem .625rem;font-size:.625rem;color:#94a3b8}',
-      '.oschat-note.is-error{color:#dc2626}',
-      '.oschat-launcher{position:fixed;right:1rem;bottom:1rem;z-index:2147482001;',
-      'display:flex;align-items:center;justify-content:center;width:2.75rem;height:2.75rem;',
-      'padding:0;overflow:hidden;cursor:pointer;background:var(--primary,#39C5BB);',
-      'border:0;border-radius:9999px;box-shadow:0 8px 24px rgba(15,23,42,.25)}',
+      '.oschat-note{display:none;padding:0 1rem .625rem;font-size:.6875rem;color:#dc2626}',
+      '.oschat-launcher{position:fixed;right:1rem;bottom:5.25rem;z-index:2147482001;',
+      'display:flex;align-items:center;justify-content:center;width:3.5rem;height:3.5rem;',
+      'padding:0;overflow:hidden;cursor:pointer;background:#fff;border:0;border-radius:1rem;',
+      'box-shadow:0 4px 16px rgba(15,23,42,.16);transition:transform .2s ease,box-shadow .2s ease}',
+      '.oschat-launcher:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(15,23,42,.22)}',
       '.oschat-launcher img{width:100%;height:100%;object-fit:cover}',
-      '.oschat-launcher span{color:#fff;font-size:.875rem;font-weight:600}',
+      '.oschat-launcher span{color:#0f172a;font-size:1.125rem;font-weight:600}',
       '.oschat-badge{position:absolute;top:-.25rem;right:-.25rem;min-width:1.125rem;',
       'height:1.125rem;padding:0 .25rem;font-size:.625rem;line-height:1.125rem;color:#fff;',
       'text-align:center;background:#ef4444;border-radius:9999px}',
@@ -280,6 +287,8 @@
       '@keyframes oschat-down{from{opacity:0;transform:translateY(-100%)}',
       'to{opacity:1;transform:none}}',
       '@media (prefers-color-scheme:dark){.oschat-card{background:#1e293b;color:#e2e8f0}',
+      '.oschat-launcher{background:#1e293b}',
+      '.oschat-launcher span{color:#e2e8f0}',
       '.oschat-bubble{background:rgba(255,255,255,.08)}.oschat-text{color:rgba(255,255,255,.72)}',
       '.oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
       'border-color:rgba(255,255,255,.14)}.oschat-foot{border-top-color:rgba(255,255,255,.08)}}'
@@ -287,9 +296,9 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function buildAvatar(message, className) {
+  function buildAvatar(className) {
     var fallback = adminLabel().slice(0, 1);
-    var source = message && message.adminAvatar ? String(message.adminAvatar) : '';
+    var source = adminAvatar();
     if (source.indexOf('https://') === 0 || source.indexOf('http://') === 0) {
       var image = chatElement('img', className);
       image.src = source;
@@ -324,7 +333,7 @@
     var thread = chatElement('div', 'oschat-thread');
     body.appendChild(thread);
 
-    var note = chatElement('p', 'oschat-note', '只能输入纯文本，请勿发送代码。');
+    var note = chatElement('p', 'oschat-note');
     var foot = chatElement('div', 'oschat-foot');
     var input = chatElement('textarea', 'oschat-input');
     input.rows = 1;
@@ -371,7 +380,7 @@
       var mine = message.direction !== 'admin';
       var row = chatElement('div', mine ? 'oschat-msg is-me' : 'oschat-msg');
       if (!mine) {
-        row.appendChild(buildAvatar(message, 'oschat-avatar'));
+        row.appendChild(buildAvatar('oschat-avatar'));
       }
       var box = chatElement('div');
       if (!mine) {
@@ -400,12 +409,18 @@
     scrollThread();
   }
 
-  function setNote(text, isError) {
+  /* The card carries no standing hint; a note only appears when something failed. */
+  function setNote(text) {
     if (!chatDom) {
       return;
     }
-    chatDom.note.textContent = text;
-    chatDom.note.className = isError ? 'oschat-note is-error' : 'oschat-note';
+    if (text) {
+      chatDom.note.textContent = text;
+      chatDom.note.style.display = 'block';
+    } else {
+      chatDom.note.textContent = '';
+      chatDom.note.style.display = 'none';
+    }
   }
 
   function setSending() {
@@ -424,7 +439,7 @@
     chatOpen = true;
     chatUnread = 0;
     renderThread();
-    setNote('只能输入纯文本，请勿发送代码。', false);
+    setNote('');
     renderLauncher();
     try {
       chatDom.input.focus({ preventScroll: true });
@@ -442,6 +457,43 @@
   }
 
   var chatLauncher = null;
+  var launcherMeasureAt = 0;
+
+  /**
+   * The launcher copies the theme's own floating back-to-top button: same size and
+   * corner radius, a card surface instead of a coloured disc. It is anchored above
+   * that button when the theme has one, so the two never overlap, and falls back to
+   * the usual bottom-right column when the button is hidden at the top of the page.
+   */
+  function positionLauncher() {
+    if (!chatLauncher) {
+      return;
+    }
+    var size = 56;
+    var gap = 12;
+    var edge = 16;
+    var anchor = document.getElementById('back-to-top-btn');
+    var rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    if (rect && rect.width > 0 && rect.height > 0) {
+      var bottom = Math.max(edge, window.innerHeight - rect.top + gap);
+      var right = Math.max(edge, window.innerWidth - rect.right);
+      chatLauncher.style.bottom = bottom + 'px';
+      chatLauncher.style.right = right + 'px';
+    } else {
+      chatLauncher.style.bottom = edge + size + gap + 'px';
+      chatLauncher.style.right = edge + 'px';
+    }
+    chatLauncher.style.left = 'auto';
+  }
+
+  function remeasureLauncher() {
+    var now = Date.now();
+    if (now - launcherMeasureAt < 200) {
+      return;
+    }
+    launcherMeasureAt = now;
+    positionLauncher();
+  }
 
   function renderLauncher() {
     var visible = chatEnabled && chatMessages.length > 0 && !chatOpen;
@@ -457,13 +509,16 @@
       chatLauncher.setAttribute('aria-label', '打开与博主的对话');
       chatLauncher.addEventListener('click', openChat);
       (document.body || document.documentElement).appendChild(chatLauncher);
+      window.addEventListener('resize', remeasureLauncher);
+      window.addEventListener('scroll', remeasureLauncher, { passive: true });
     }
     chatLauncher.textContent = '';
-    chatLauncher.appendChild(buildAvatar(lastAdminMessage(), ''));
+    chatLauncher.appendChild(buildAvatar('oschat-launcher-avatar'));
     if (chatUnread > 0) {
       chatLauncher.appendChild(chatElement('span', 'oschat-badge', String(chatUnread)));
     }
     chatLauncher.style.display = 'flex';
+    positionLauncher();
   }
 
   function pushMessage(message) {
@@ -495,6 +550,7 @@
     }
     chatSending = true;
     setSending();
+    setNote('');
     fetch(apiBase + 'chat-reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -520,15 +576,15 @@
           writeChatSeq(chatSeq);
         }
         renderThread();
-        setNote('已发送，博主能在后台看到。', false);
+        setNote('');
       } else {
-        setNote('发送失败，请稍后再试。', true);
+        setNote('发送失败，请稍后再试。');
       }
       setSending();
     }).catch(function () {
       chatSending = false;
       setSending();
-      setNote('发送失败，请稍后再试。', true);
+      setNote('发送失败，请稍后再试。');
     });
   }
 

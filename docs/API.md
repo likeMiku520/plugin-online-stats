@@ -91,7 +91,7 @@ window.__ONLINE_STATS__ = {
       "text": "你好，看到你在看这篇博客～",
       "sentAt": 1760000000000,
       "adminName": "fufu大王",
-      "adminAvatar": "https://blog.fufu520.cn/upload/avatar.png"
+      "adminAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp"
     }
   ]
 }
@@ -152,6 +152,7 @@ window.__ONLINE_STATS__ = {
 ```json
 {
   "ip": "1.2.3.4",
+  "avatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
   "messages": [
     {
       "seq": 12,
@@ -159,7 +160,7 @@ window.__ONLINE_STATS__ = {
       "text": "你好",
       "sentAt": 1760000000000,
       "adminName": "fufu大王",
-      "adminAvatar": "https://blog.fufu520.cn/upload/avatar.png",
+      "adminAvatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
       "visitorKey": null,
       "pageUrl": null,
       "pageTitle": null,
@@ -182,7 +183,9 @@ window.__ONLINE_STATS__ = {
 { "ok": true, "seq": 12 }
 ```
 
-消息上记录的作者名字与头像来自当前登录账号（`uc.api.halo.run` 的当前用户），不由请求体决定，因此访客看到的身份无法被伪造。
+消息上记录的作者名字来自当前登录账号（`uc.api.halo.run` 的当前用户），不由请求体决定，因此访客看到的身份无法被伪造；头像则固定取设置里的「对话卡片里显示的头像」（默认 `https://blog.fufu520.cn/upload/fufu_touming.webp`），与登录的是哪个账号无关。`GET /chat-messages` 返回的 `avatar` 就是这张头像。
+
+访客侧脚本用最新一条后台消息的头像渲染整条对话，所以同一条对话里不会出现两种头像。
 
 ## 当前在线访客
 
