@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import axios from 'axios'
 import { applyLocation, type LocationView, type RecordView } from '../utils/visitor'
 
@@ -39,6 +39,8 @@ const chatSending = ref(false)
 const chatError = ref('')
 const chatLoaded = ref(false)
 const chatEnabled = ref(true)
+const listRef = ref<HTMLElement | null>(null)
+let scrollOnNextLoad = true
 const admin = ref<AdminInfo | null>(null)
 /** Avatar visitors receive; a plugin setting, so it wins over the account avatar. */
 const chatAvatar = ref('')
@@ -185,11 +187,39 @@ async function loadChat() {
   } catch (e) {
     chatLoaded.value = true
   }
+  const force = scrollOnNextLoad
+  scrollOnNextLoad = false
+  await scrollToLatest(force)
+}
+
+/** True while the list is close enough to the end that following it is not annoying. */
+function isAtLatest(): boolean {
+  const list = listRef.value
+  if (!list) {
+    return true
+  }
+  return list.scrollHeight - list.scrollTop - list.clientHeight < 48
+}
+
+/**
+ * Puts the newest message in view. Opening the panel always jumps to the end; a poll
+ * that arrives while the thread is being read leaves the scroll position alone.
+ */
+async function scrollToLatest(force: boolean) {
+  if (!force && !isAtLatest()) {
+    return
+  }
+  await nextTick()
+  const list = listRef.value
+  if (list) {
+    list.scrollTop = list.scrollHeight
+  }
 }
 
 function openChat() {
   chatOpen.value = true
   chatError.value = ''
+  scrollOnNextLoad = true
   loadAdmin()
   loadChat()
 }
@@ -205,6 +235,8 @@ async function send() {
   }
   chatSending.value = true
   chatError.value = ''
+  // The message just written is the newest one, so it has to be visible.
+  scrollOnNextLoad = true
   try {
     await axios.post(`${api}/chat-send`, { ip: chatIp.value, text })
     chatDraft.value = ''
@@ -285,7 +317,7 @@ onUnmounted(() => {
             </div>
 
             <div v-if="!chatLoaded" class="os-chat__empty">加载中…</div>
-            <ul v-else-if="chatMessages.length" class="os-chat__list">
+            <ul v-else-if="chatMessages.length" ref="listRef" class="os-chat__list">
               <li
                 v-for="message in chatMessages"
                 :key="message.seq"

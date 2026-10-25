@@ -53,6 +53,8 @@ const stats = ref<Stats>({
 const detail = ref<RecordView | null>(null)
 const rowBusy = reactive<Record<string, boolean>>({})
 const rowError = reactive<Record<string, string>>({})
+const unreadTotal = ref(0)
+const unreadByIp = ref<Record<string, number>>({})
 
 let pollTimer: number | undefined
 let searchTimer: number | undefined
@@ -61,6 +63,31 @@ const totalPages = computed(() => Math.max(1, Math.ceil(total.value / size.value
 const canPrev = computed(() => page.value > 1)
 const canNext = computed(() => page.value < totalPages.value)
 const historyTotal = computed(() => stats.value.historyTotal ?? (stats.value.humans ?? 0) + (stats.value.bots ?? 0))
+const unreadIps = computed(() => Object.keys(unreadByIp.value))
+
+function unreadFor(item: RecordView): number {
+  return item.ip ? unreadByIp.value[item.ip] || 0 : 0
+}
+
+/**
+ * Unread counts per visitor address, so a reply from a visitor shows up on the row it
+ * belongs to instead of only inside the conversation panel.
+ */
+async function loadUnread() {
+  try {
+    const { data } = await axios.get(`${api}/chat-conversations`)
+    unreadTotal.value = data.unreadTotal || 0
+    const counts: Record<string, number> = {}
+    for (const item of data.items || []) {
+      if (item.unread > 0 && item.ip) {
+        counts[item.ip] = item.unread
+      }
+    }
+    unreadByIp.value = counts
+  } catch (e) {
+    /* the endpoint is admin only; keep the previous state on any failure */
+  }
+}
 
 async function load() {
   loading.value = true
@@ -222,11 +249,16 @@ function deviceSummary(item: RecordView): string {
   return parts.join(' · ')
 }
 
+function refresh() {
+  load()
+  loadUnread()
+}
+
 watch([page, size], () => load())
 
 onMounted(() => {
-  load()
-  pollTimer = window.setInterval(load, 3_000)
+  refresh()
+  pollTimer = window.setInterval(refresh, 3_000)
 })
 
 onUnmounted(() => {
@@ -288,6 +320,15 @@ onUnmounted(() => {
       class="os-alert os-alert--info"
     >
       持久化任务每 20 秒执行一次，尚未产生第一条记录，稍候会自动出现。
+    </div>
+
+    <div v-if="unreadTotal > 0" class="os-unread">
+      <span class="os-unread__dot" />
+      <span class="os-unread__text">
+        有 {{ unreadTotal }} 条未读访客消息<template v-if="unreadIps.length">
+          （{{ unreadIps.slice(0, 3).join('、') }}{{ unreadIps.length > 3 ? ' 等' : '' }}）</template
+        >，点对应记录的「更多」查看。
+      </span>
     </div>
 
     <div class="os-page__card">
@@ -423,8 +464,16 @@ onUnmounted(() => {
               <div class="os-muted">{{ fmtTime(item.lastSeenAt) }}</div>
             </td>
             <td class="os-table__right">
-              <button class="os-more" type="button" @click="openDetail(item)">
+              <button
+                class="os-more"
+                :class="{ 'os-more--unread': unreadFor(item) > 0 }"
+                type="button"
+                @click="openDetail(item)"
+              >
                 更多<span class="os-more__arrow">›</span>
+                <span v-if="unreadFor(item) > 0" class="os-more__badge">
+                  {{ unreadFor(item) }}
+                </span>
               </button>
             </td>
           </tr>
@@ -762,8 +811,57 @@ onUnmounted(() => {
     background: #B9E7E3;
   }
 
+  &--unread {
+    color: #b91c1c;
+    background: #fef2f2;
+    border-color: #fecaca;
+
+    &:hover {
+      background: #fee2e2;
+    }
+  }
+
   &__arrow {
     margin-left: 0.125rem;
+  }
+
+  &__badge {
+    display: inline-block;
+    min-width: 1rem;
+    padding: 0 0.25rem;
+    margin-left: 0.25rem;
+    font-size: 0.625rem;
+    line-height: 1rem;
+    color: #fff;
+    text-align: center;
+    background: #ef4444;
+    border-radius: 9999px;
+  }
+}
+
+.os-unread {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.625rem 0.875rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.5rem;
+
+  &__dot {
+    flex: none;
+    width: 0.5rem;
+    height: 0.5rem;
+    background: #ef4444;
+    border-radius: 9999px;
+    box-shadow: 0 0 0 3px rgb(239 68 68 / 0.18);
+  }
+
+  &__text {
+    line-height: 1.6;
   }
 }
 
