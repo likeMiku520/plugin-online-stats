@@ -51,8 +51,8 @@ spec:
           value: false
         - $formkit: text
           name: chatAvatar
-          label: 对话头像（备用）
-          help: 默认用当前登录账号自己的头像。账号没有头像、或者想让所有管理员统一显示同一张图时，在这里填一个图片地址。
+          label: 对话头像（留空即可）
+          help: 留空时，访客看到的头像是发消息那个管理员自己账号的头像；填了图片地址，则所有管理员统一使用这张图。
           value: ""
         - $formkit: text
           name: geoEndpoint

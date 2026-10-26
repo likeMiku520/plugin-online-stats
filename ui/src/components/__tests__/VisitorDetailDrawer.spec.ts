@@ -211,30 +211,35 @@ describe('the console conversation panel', () => {
     expect(scrollTop).toBe(600)
   })
 
-  it('tells the reader which picture the visitor will see', async () => {
+  it('carries no standing avatar explanation in the panel', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    expect(wrapper.find('.os-chat__hint').text()).toContain('当前账号的头像')
+    expect(wrapper.find('.os-chat').text()).not.toContain('访客看到的是')
   })
 
-  it('explains when the account has no picture at all', async () => {
+  it('shows the author picture beside each administrator message', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/chat-messages')) {
         return Promise.resolve({
           data: {
             visitorKey: 'v-1',
+            ip: '10.0.0.9',
             enabled: true,
-            avatar: null,
             peerName: null,
             peerAvatar: null,
-            messages: [],
+            messages: [
+              chatMessage(1, 'admin', '第一条', '甲管理员'),
+              {
+                ...chatMessage(2, 'admin', '第二条', '乙管理员'),
+                authorAvatar: 'https://blog.fufu520.cn/upload/b.webp',
+              },
+              {
+                ...chatMessage(3, 'admin', '第三条', '丙管理员'),
+                authorAvatar: null,
+              },
+            ],
           },
-        })
-      }
-      if (url.includes('api.console.halo.run')) {
-        return Promise.resolve({
-          data: { user: { metadata: { name: 'fufu' }, spec: { displayName: 'fufu大王' } } },
         })
       }
       return Promise.resolve({ data: {} })
@@ -243,7 +248,13 @@ describe('the console conversation panel', () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    expect(wrapper.find('.os-chat__hint').text()).toContain('还没有头像')
+    const authors = wrapper.findAll('.os-chat__author')
+    expect(authors.length).toBe(3)
+    expect(authors[1].attributes('src')).toBe('https://blog.fufu520.cn/upload/b.webp')
+    // An account without a picture falls back to the first character of its name.
+    expect(authors[2].text()).toBe('丙')
+    // Their own messages are the right hand column.
+    expect(authors[0].element.closest('.os-chat__item')?.classList).toContain('is-mine')
   })
 
   it('sends on Enter and keeps Alt+Enter for a newline', async () => {

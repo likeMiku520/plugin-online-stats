@@ -19,7 +19,6 @@ interface ChatMessage {
 interface AdminInfo {
   name: string
   displayName: string
-  avatar: string
 }
 
 const props = defineProps<{ record: RecordView }>()
@@ -44,8 +43,6 @@ const chatEnabled = ref<boolean | null>(null)
 const listRef = ref<HTMLElement | null>(null)
 let scrollOnNextLoad = true
 const admin = ref<AdminInfo | null>(null)
-/** Picture the plugin is configured to send, when one was chosen. */
-const chatAvatar = ref('')
 /** Who the conversation is with: a signed in account, or an anonymous visitor. */
 const peerName = ref('')
 const peerAvatar = ref('')
@@ -61,20 +58,6 @@ const adminLabel = computed(() => admin.value?.displayName || admin.value?.name 
 const peerLabel = computed(() => peerName.value || '访客')
 /** Single character stand-in when the other side has no picture of its own. */
 const peerInitial = computed(() => (peerName.value ? peerName.value.slice(0, 1) : '访'))
-
-/**
- * What the visitor's popup will actually put next to the messages. Showing it here
- * saves a round of guessing when the account has no picture of its own.
- */
-const avatarHint = computed(() => {
-  if (chatAvatar.value) {
-    return '访客看到的是设置里指定的那张头像。'
-  }
-  if (admin.value?.avatar) {
-    return '访客看到的是当前账号的头像。'
-  }
-  return '当前账号还没有头像，访客那边显示名字首字；在个人资料里上传头像，或到插件设置里指定一张。'
-})
 
 watch(
   () => props.record,
@@ -183,15 +166,14 @@ async function copy(text: string | null, tag: string) {
 
 async function loadAdmin() {
   try {
-    // The console's own current-user endpoint, which is also what Halo's avatar
-    // component reads: the picture lives in the account's spec.avatar.
+    // The console's own current-user endpoint, which is what Halo's avatar component
+    // reads too; it only needs the name here, the pictures travel on the messages.
     const { data } = await axios.get('/apis/api.console.halo.run/v1alpha1/users/-')
     const user = data?.user || data || {}
     const spec = user.spec || {}
     admin.value = {
       name: user.metadata?.name || data.name || '',
       displayName: spec.displayName || data.displayName || user.metadata?.name || '',
-      avatar: spec.avatar || data.avatar || '',
     }
   } catch (e) {
     admin.value = null
@@ -207,7 +189,6 @@ async function loadChat() {
       params: { key: chatKey.value },
     })
     chatMessages.value = data.messages || []
-    chatAvatar.value = data.avatar || ''
     peerName.value = data.peerName || ''
     peerAvatar.value = data.peerAvatar || ''
     peerIp.value = data.ip || ''
@@ -349,7 +330,6 @@ onUnmounted(() => {
                 <span v-if="peerIp">（{{ peerIp }}）</span>
               </div>
             </div>
-            <p class="os-chat__hint">{{ avatarHint }}</p>
 
             <div v-if="!chatLoaded" class="os-chat__empty">加载中…</div>
             <ul v-else-if="chatMessages.length" ref="listRef" class="os-chat__list">
@@ -358,14 +338,27 @@ onUnmounted(() => {
                 :key="message.seq"
                 :class="['os-chat__item', message.direction === 'admin' ? 'is-mine' : 'is-theirs']"
               >
-                <div class="os-chat__bubble">{{ message.text }}</div>
-                <div class="os-chat__meta">
-                  {{ message.direction === 'admin' ? message.authorName || adminLabel : peerLabel }} ·
-                  {{ fmtRelative(message.sentAt) }}
-                  <span v-if="message.direction === 'visitor' && message.pageTitle">
-                    · 在「{{ message.pageTitle }}」
-                  </span>
+                <div class="os-chat__body">
+                  <div class="os-chat__bubble">{{ message.text }}</div>
+                  <div class="os-chat__meta">
+                    {{ message.direction === 'admin' ? message.authorName || adminLabel : peerLabel }} ·
+                    {{ fmtRelative(message.sentAt) }}
+                    <span v-if="message.direction === 'visitor' && message.pageTitle">
+                      · 在「{{ message.pageTitle }}」
+                    </span>
+                  </div>
                 </div>
+                <template v-if="message.direction === 'admin'">
+                  <img
+                    v-if="message.authorAvatar"
+                    class="os-chat__author"
+                    :src="message.authorAvatar"
+                    alt=""
+                  />
+                  <span v-else class="os-chat__author os-chat__author--fallback">
+                    {{ (message.authorName || adminLabel).slice(0, 1) }}
+                  </span>
+                </template>
               </li>
             </ul>
             <div v-else class="os-chat__empty">
@@ -840,7 +833,6 @@ onUnmounted(() => {
   }
 
   &__hint {
-    margin: 0 0 0.25rem;
     font-size: 0.6875rem;
     line-height: 1.6;
     color: #9ca3af;
@@ -859,17 +851,48 @@ onUnmounted(() => {
 
   &__item {
     display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
+    gap: 0.375rem;
+    align-items: flex-start;
     max-width: 90%;
 
     &.is-mine {
       align-self: flex-end;
-      align-items: flex-end;
+      /* The author's picture sits to the right of their own message. */
+      flex-direction: row-reverse;
     }
 
     &.is-theirs {
       align-self: flex-start;
+    }
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    min-width: 0;
+  }
+
+  &__item.is-mine &__body {
+    align-items: flex-end;
+  }
+
+  &__author {
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-top: 0.125rem;
+    object-fit: cover;
+    border-radius: 9999px;
+
+    &--fallback {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: #fff;
+      background: #39C5BB;
     }
   }
 
