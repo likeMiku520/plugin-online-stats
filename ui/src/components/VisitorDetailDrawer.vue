@@ -311,7 +311,6 @@ onUnmounted(() => {
               </span>
               <div class="os-chat__me-text">
                 <strong>{{ adminLabel }}</strong>
-                <span>对方看到的是 {{ adminLabel }} 的头像和名字，以及下面这条消息。</span>
               </div>
             </div>
 

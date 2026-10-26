@@ -772,7 +772,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             payload.put("visitorKey", key);
             payload.put("ip", showIp || ip.isBlank() ? ip : maskIp(ip));
             payload.put("enabled", settings.chatEnabledOrDefault());
-            payload.put("avatar", settings.chatAvatarOrDefault());
+            // Null means "the panel should show the signed in account's own avatar".
+            payload.put("avatar", settings.chatAvatarOverride());
             payload.put("messages", thread.stream()
                 .map(OnlineStatsEndpoint::toAdminChatView).toList());
             return ServerResponse.ok().bodyValue(payload);
@@ -802,9 +803,14 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                         .bodyValue(Map.of("error", "missing key or text"));
                 }
                 return chatService.resolveAdmin().flatMap(admin -> {
+                    // The signed in account's own picture is used unless the setting
+                    // names one for everybody.
+                    String configured = settings.chatAvatarOverride();
+                    String avatar = configured != null ? configured
+                        : (admin.avatar() != null && !admin.avatar().isBlank()
+                            ? admin.avatar() : OnlineStatsSettings.DEFAULT_CHAT_AVATAR);
                     ChatMessageService.ChatEntry entry = chatService.append(key, null,
-                        "admin", text, admin.name(), settings.chatAvatarOrDefault(),
-                        null, null);
+                        "admin", text, admin.name(), avatar, null, null);
                     Map<String, Object> payload = new LinkedHashMap<>();
                     payload.put("ok", true);
                     payload.put("seq", entry.seq());
@@ -826,20 +832,46 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     /**
-     * A request counts as encrypted when Spring already rewrote the scheme from the
-     * forwarding headers (Halo runs with {@code forward-headers-strategy: native}), or
-     * when the proxy says so itself.
+     * Whether the request can be shown to come from an encrypted page. Several signals
+     * are accepted because no single one survives every deployment: a CDN that
+     * terminates TLS and pulls from the origin over plain HTTP leaves the connection
+     * scheme and {@code X-Forwarded-Proto} describing the internal hop, while the
+     * browser still reports the page it came from through {@code Referer}/{@code Origin}.
+     * Only when every signal is missing or says http is the request treated as plain.
      */
     private static boolean isSecure(ServerRequest request) {
-        if (request.uri().getScheme() != null
-            && "https".equalsIgnoreCase(request.uri().getScheme())) {
+        if (isHttpsScheme(request.uri().getScheme())) {
             return true;
         }
-        String proto = request.headers().firstHeader("X-Forwarded-Proto");
-        if (proto == null || proto.isBlank()) {
-            return false;
+        if (isHttpsScheme(firstValue(request.headers().firstHeader("X-Forwarded-Proto")))) {
+            return true;
         }
-        return "https".equalsIgnoreCase(proto.split(",")[0].trim());
+        String forwarded = request.headers().firstHeader("Forwarded");
+        if (forwarded != null && forwarded.toLowerCase(Locale.ROOT).contains("proto=https")) {
+            return true;
+        }
+        String cfVisitor = request.headers().firstHeader("CF-Visitor");
+        if (cfVisitor != null && cfVisitor.replace(" ", "").toLowerCase(Locale.ROOT)
+            .contains("\"scheme\":\"https\"")) {
+            return true;
+        }
+        return isHttpsUrl(request.headers().firstHeader(HttpHeaders.ORIGIN))
+            || isHttpsUrl(request.headers().firstHeader(HttpHeaders.REFERER));
+    }
+
+    private static boolean isHttpsScheme(String scheme) {
+        return scheme != null && "https".equalsIgnoreCase(scheme.trim());
+    }
+
+    private static String firstValue(String header) {
+        if (header == null || header.isBlank()) {
+            return null;
+        }
+        return header.split(",")[0].trim();
+    }
+
+    private static boolean isHttpsUrl(String value) {
+        return value != null && value.trim().toLowerCase(Locale.ROOT).startsWith("https://");
     }
 
     private static Mono<ServerResponse> insecureTransport() {

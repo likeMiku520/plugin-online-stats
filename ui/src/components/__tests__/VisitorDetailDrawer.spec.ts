@@ -99,7 +99,8 @@ beforeEach(() => {
         data: {
           ip: '10.0.0.9',
           enabled: true,
-          avatar: 'https://blog.fufu520.cn/upload/fufu_touming.webp',
+          // No configured picture, so the panel previews the account's own avatar.
+          avatar: null,
           messages: [
             chatMessage(1, 'admin', '你好'),
             chatMessage(2, 'visitor', '在的', null),
@@ -110,7 +111,11 @@ beforeEach(() => {
     }
     if (url.includes('uc.api.halo.run')) {
       return Promise.resolve({
-        data: { name: 'fufu', displayName: 'fufu大王', avatar: '' },
+        data: {
+          name: 'fufu',
+          displayName: 'fufu大王',
+          avatar: 'https://blog.fufu520.cn/upload/fufu-account.webp',
+        },
       })
     }
     return Promise.resolve({ data: {} })
@@ -119,13 +124,14 @@ beforeEach(() => {
 })
 
 describe('the console conversation panel', () => {
-  it('greets the reader with the signed in administrator', async () => {
+  it('shows the signed in administrator by name and nothing more', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    const text = wrapper.find('.os-chat__me-text').text()
-    expect(text).toContain('fufu大王')
-    expect(text).toContain('对方看到的是 fufu大王 的头像和名字')
+    const block = wrapper.find('.os-chat__me-text')
+    expect(block.text()).toContain('fufu大王')
+    expect(block.text()).not.toContain('对方看到的是')
+    expect(block.element.children.length).toBe(1)
   })
 
   it('opens on the newest message rather than the top of the thread', async () => {
@@ -133,6 +139,44 @@ describe('the console conversation panel', () => {
     await flushPromises()
 
     expect(scrollTop).toBe(600)
+  })
+
+  it('previews the account avatar when no picture is configured', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    expect(wrapper.find('img.os-chat__avatar').attributes('src')).toBe(
+      'https://blog.fufu520.cn/upload/fufu-account.webp',
+    )
+  })
+
+  it('prefers a configured picture over the account avatar', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/chat-messages')) {
+        return Promise.resolve({
+          data: {
+            visitorKey: 'v-1',
+            enabled: true,
+            avatar: 'https://blog.fufu520.cn/upload/one-for-everyone.webp',
+            messages: [chatMessage(1, 'admin', '你好')],
+          },
+        })
+      }
+      return Promise.resolve({
+        data: {
+          name: 'fufu',
+          displayName: 'fufu大王',
+          avatar: 'https://blog.fufu520.cn/upload/fufu-account.webp',
+        },
+      })
+    })
+
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    expect(wrapper.find('img.os-chat__avatar').attributes('src')).toBe(
+      'https://blog.fufu520.cn/upload/one-for-everyone.webp',
+    )
   })
 
   it('scrolls back to the end after sending', async () => {

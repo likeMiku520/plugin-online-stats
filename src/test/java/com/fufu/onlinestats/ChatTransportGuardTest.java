@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.net.URI;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -19,11 +20,17 @@ import org.springframework.web.reactive.function.server.ServerRequest;
 class ChatTransportGuardTest {
 
     private static ServerRequest request(String scheme, String forwardedProto) {
+        return request(scheme, Map.of(), forwardedProto);
+    }
+
+    private static ServerRequest request(String scheme, Map<String, String> extraHeaders,
+                                         String forwardedProto) {
         HttpHeaders headers = new HttpHeaders();
         headers.set(HttpHeaders.USER_AGENT, "probe");
         if (forwardedProto != null) {
             headers.set("X-Forwarded-Proto", forwardedProto);
         }
+        extraHeaders.forEach(headers::set);
         return MockServerRequest.builder()
             .method(HttpMethod.GET)
             .uri(URI.create(scheme
@@ -68,6 +75,44 @@ class ChatTransportGuardTest {
         assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", "https"),
             settings(true)));
         assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", "https, http"),
+            settings(true)));
+    }
+
+    @Test
+    void aCdnThatPullsFromTheOriginOverHttpIsStillRecognisedAsEncrypted() {
+        // The reported deployment: TLS ends at the CDN, the origin is reached in plain
+        // on an internal port, and nothing rewrites the scheme. The browser still says
+        // where the page came from, which is the signal that keeps the guard usable.
+        Map<String, String> referer =
+            Map.of(HttpHeaders.REFERER, "https://blog.fufu520.cn/archives/1");
+        assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", referer, null),
+            settings(true)));
+
+        Map<String, String> origin = Map.of(HttpHeaders.ORIGIN, "https://blog.fufu520.cn");
+        assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", origin, null),
+            settings(true)));
+    }
+
+    @Test
+    void otherForwardingDialectsAreUnderstoodToo() {
+        Map<String, String> forwarded = Map.of("Forwarded", "for=1.2.3.4;proto=https;by=cdn");
+        assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", forwarded, null),
+            settings(true)));
+
+        Map<String, String> cfVisitor = Map.of("CF-Visitor", "{\"scheme\":\"https\"}");
+        assertFalse(OnlineStatsEndpoint.rejectsPlaintext(request("http", cfVisitor, null),
+            settings(true)));
+    }
+
+    @Test
+    void aGenuinelyPlainPageIsStillRefusedWhenTheGuardIsOn() {
+        Map<String, String> plainReferer =
+            Map.of(HttpHeaders.REFERER, "http://blog.fufu520.cn/archives/1");
+        assertTrue(OnlineStatsEndpoint.rejectsPlaintext(request("http", plainReferer, null),
+            settings(true)));
+
+        Map<String, String> plainCf = Map.of("CF-Visitor", "{\"scheme\":\"http\"}");
+        assertTrue(OnlineStatsEndpoint.rejectsPlaintext(request("http", plainCf, null),
             settings(true)));
     }
 }

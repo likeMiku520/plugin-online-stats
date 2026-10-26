@@ -58,17 +58,30 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     }
 
     /**
+     * The picture the administrator explicitly chose, or null when the signed in
+     * account's own avatar should be used instead. The value earlier versions wrote as
+     * their default counts as "not chosen", so an upgrade switches to account avatars
+     * without anyone having to edit the setting.
+     */
+    public String chatAvatarOverride() {
+        if (chatAvatar == null || chatAvatar.isBlank()) {
+            return null;
+        }
+        String value = chatAvatar.trim();
+        if (DEFAULT_CHAT_AVATAR.equals(value)) {
+            return null;
+        }
+        return value.startsWith("https://") || value.startsWith("http://") ? value : null;
+    }
+
+    /**
      * Avatar painted on every message the visitor's popup shows. Configured rather
      * than read from the account, so the picture visitors see stays the same one even
      * when the signed-in administrator changes.
      */
     public String chatAvatarOrDefault() {
-        if (chatAvatar == null || chatAvatar.isBlank()) {
-            return DEFAULT_CHAT_AVATAR;
-        }
-        String value = chatAvatar.trim();
-        return value.startsWith("https://") || value.startsWith("http://")
-            ? value : DEFAULT_CHAT_AVATAR;
+        String override = chatAvatarOverride();
+        return override != null ? override : DEFAULT_CHAT_AVATAR;
     }
 
     /**

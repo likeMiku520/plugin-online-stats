@@ -38,24 +38,22 @@ spec:
           value: true
         - $formkit: checkbox
           name: chatEnabled
-          label: 即时通讯（后台给访客发消息）
+          label: 即时通讯
           help: |-
-            总开关。打开后，前台页面每 5 秒查询一次新消息，在「访客明细」点某个 IP 的「更多」就能给这个访客发消息，对方的页面上会弹出对话卡片并可以直接回复；关闭后前台不再有任何对话相关的请求，后台也不能再发送。
-            提示：此功能仅为学习测试使用，请勿用于正式环境。
-          value: true
+            打开后，访客页面每 5 秒取一次新消息，你可以在「访客明细」点某个访客的「更多」给他发消息，对方页面会弹出对话框直接回复。
+            关掉后前台不再发起任何对话请求，后台也发不出去。此功能仅为学习测试使用。
+          value: false
         - $formkit: checkbox
           name: chatRequireHttps
-          label: 仅允许 HTTPS（默认关闭，排错用）
-          help: |-
-            打开后，对话接口在「服务端判断为非加密」的请求上直接返回 403。
-            注意：Halo 在反向代理后面时只能看到内网那一跳，代理没把 X-Forwarded-Proto 传对的话，明明访客走的是 HTTPS 也会被判断成明文，对话就会整个失效——所以默认关闭。
-            站点确实是纯 HTTP 部署、想让对话彻底不可用时再打开。
+          label: 仅允许 HTTPS
+          if: "$get(chatEnabled).value === true"
+          help: 打开后，只有能确认是 HTTPS 的请求才允许使用对话接口。站点走 CDN 或反向代理时，服务端常常只看得到回源那一跳，确认不了就会误拒，保持关闭即可。
           value: false
         - $formkit: text
           name: chatAvatar
-          label: 对话卡片里显示的头像
-          help: 访客看到的对话卡片和消息都用这个头像。留空或不是完整网址时使用默认头像。
-          value: "https://blog.fufu520.cn/upload/fufu_touming.webp"
+          label: 对话头像（备用）
+          help: 默认用当前登录账号自己的头像。账号没有头像、或者想让所有管理员统一显示同一张图时，在这里填一个图片地址。
+          value: ""
         - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口

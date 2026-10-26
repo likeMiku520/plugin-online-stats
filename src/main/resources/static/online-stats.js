@@ -357,7 +357,7 @@
     var input = chatElement('textarea', 'oschat-input');
     input.rows = 1;
     input.maxLength = CHAT_MAX_LENGTH;
-    input.placeholder = '回复博主…';
+    input.placeholder = '回复管理员…';
     input.setAttribute('aria-label', '回复内容');
     input.addEventListener('keydown', function (event) {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
@@ -389,9 +389,7 @@
   }
 
   function buildThread() {
-    var opener = lastAdminMessage();
-    chatDom.title.textContent = opener && opener.authorName
-      ? opener.authorName + ' 给你发来消息' : '你有一条新消息';
+    chatDom.title.textContent = '管理员给你发来消息';
     chatDom.thread.textContent = '';
     var start = Math.max(0, chatMessages.length - CHAT_RENDER_LIMIT);
     for (var i = start; i < chatMessages.length; i++) {

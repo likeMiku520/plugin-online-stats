@@ -16,7 +16,7 @@ spec:
   repo: https://github.com/likeMiku520/plugin-online-stats
   issues: https://github.com/likeMiku520/plugin-online-stats/issues
   displayName: "在线访客统计"
-  description: "实时统计在线访客人数，保存访客历史记录，并在后台查看访客属地、设备与访问详情。"
+  description: "看看现在有几个人在站上、都从哪来、看了什么。历史访客会保存下来，后台可以查属地、设备和访问记录。"
   settingName: online-stats-settings
   configMapName: online-stats-configmap
   license:
