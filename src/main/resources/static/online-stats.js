@@ -210,27 +210,6 @@
     return Math.floor(diff / 86400000) + ' 天前';
   }
 
-  function lastAdminMessage() {
-    for (var i = chatMessages.length - 1; i >= 0; i--) {
-      if (chatMessages[i].direction === 'admin') {
-        return chatMessages[i];
-      }
-    }
-    return null;
-  }
-
-  function authorLabel() {
-    var message = lastAdminMessage();
-    return message && message.authorName ? message.authorName : '博主';
-  }
-
-  /* One author writes the whole thread, so every message is drawn with the same
-   avatar instead of mixing whatever each message happened to carry. */
-  function authorAvatar() {
-    var message = lastAdminMessage();
-    return message && message.authorAvatar ? String(message.authorAvatar) : '';
-  }
-
   function injectChatStyle() {
     if (document.getElementById('oschat-style')) {
       return;
@@ -315,9 +294,14 @@
     (document.head || document.documentElement).appendChild(style);
   }
 
-  function buildAvatar(className) {
-    var fallback = authorLabel().slice(0, 1);
-    var source = authorAvatar();
+  /**
+   * A picture when the author has one, otherwise their first character. An account
+   * without an uploaded avatar gets the letter rather than somebody else's face.
+   */
+  function buildAvatar(className, name, avatar) {
+    var label = name ? String(name) : '管理员';
+    var fallback = label.slice(0, 1);
+    var source = avatar ? String(avatar) : '';
     if (source.indexOf('https://') === 0 || source.indexOf('http://') === 0) {
       var image = chatElement('img', className);
       image.src = source;
@@ -336,7 +320,7 @@
   function buildCard() {
     var card = chatElement('div', 'oschat-card');
     card.setAttribute('role', 'dialog');
-    card.setAttribute('aria-label', '博主发来的消息');
+    card.setAttribute('aria-label', '管理员发来的消息');
 
     var head = chatElement('div', 'oschat-head');
     var title = chatElement('h2', 'oschat-title');
@@ -360,10 +344,15 @@
     input.placeholder = '回复管理员…';
     input.setAttribute('aria-label', '回复内容');
     input.addEventListener('keydown', function (event) {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-        event.preventDefault();
-        sendReply();
+      if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) {
+        return;
       }
+      // Alt+Enter keeps the newline; a plain Enter sends.
+      if (event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      sendReply();
     });
     var send = chatElement('button', 'oschat-send', '发送');
     send.type = 'button';
@@ -397,12 +386,15 @@
       var mine = message.direction !== 'admin';
       var row = chatElement('div', mine ? 'oschat-msg is-me' : 'oschat-msg');
       if (!mine) {
-        row.appendChild(buildAvatar('oschat-avatar'));
+        /* Every message carries its own author, so two administrators writing to the
+         * same visitor stay distinguishable instead of all wearing the last name. */
+        row.appendChild(buildAvatar('oschat-avatar', message.authorName,
+          message.authorAvatar));
       }
       var box = chatElement('div');
       if (!mine) {
         box.appendChild(chatElement('div', 'oschat-name',
-          authorLabel() + (message.sentAt ? ' · ' + timeLabel(message.sentAt) : '')));
+          messageLabel(message) + (message.sentAt ? ' · ' + timeLabel(message.sentAt) : '')));
       }
       var bubble = chatElement('div', 'oschat-bubble');
       bubble.appendChild(chatElement('p', 'oschat-text', message.text));
@@ -410,6 +402,10 @@
       row.appendChild(box);
       chatDom.thread.appendChild(row);
     }
+  }
+
+  function messageLabel(message) {
+    return message && message.authorName ? String(message.authorName) : '管理员';
   }
 
   function scrollThread() {
@@ -564,7 +560,7 @@
     if (!chatLauncher) {
       chatLauncher = chatElement('button', 'oschat-launcher');
       chatLauncher.type = 'button';
-      chatLauncher.setAttribute('aria-label', '打开与博主的对话');
+      chatLauncher.setAttribute('aria-label', '打开与管理员的对话');
       chatLauncher.addEventListener('click', function () {
         openChat(true);
       });

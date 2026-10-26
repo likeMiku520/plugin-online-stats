@@ -266,6 +266,28 @@ public class ChatMessageService {
         return unread;
     }
 
+    /**
+     * Who the console is talking to: the identity carried by the newest reply. A visitor
+     * who was signed in to Halo is remembered by name and picture; everyone else has
+     * neither, and the console shows a plain "访客".
+     */
+    public Author peer(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
+        if (thread == null) {
+            return new Author(null, null);
+        }
+        String name = null;
+        String avatar = null;
+        for (ChatEntry entry : thread) {
+            if ("visitor".equals(entry.direction()) && entry.authorName() != null
+                && !entry.authorName().isBlank()) {
+                name = entry.authorName();
+                avatar = entry.authorAvatar();
+            }
+        }
+        return new Author(name, avatar);
+    }
+
     /** Marks every visitor reply of one conversation as seen by the console. */
     public void markReadByAdmin(String key) {
         Deque<ChatEntry> thread = conversations.get(key);

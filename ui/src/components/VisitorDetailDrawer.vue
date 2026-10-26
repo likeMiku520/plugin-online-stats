@@ -44,8 +44,12 @@ const chatEnabled = ref<boolean | null>(null)
 const listRef = ref<HTMLElement | null>(null)
 let scrollOnNextLoad = true
 const admin = ref<AdminInfo | null>(null)
-/** Avatar visitors receive; a plugin setting, so it wins over the account avatar. */
+/** Picture the plugin is configured to send, when one was chosen. */
 const chatAvatar = ref('')
+/** Who the conversation is with: a signed in account, or an anonymous visitor. */
+const peerName = ref('')
+const peerAvatar = ref('')
+const peerIp = ref('')
 
 let chatTimer: number | undefined
 
@@ -54,8 +58,23 @@ const chatKey = computed(() => detail.value.name)
 const canChat = computed(() => !!chatKey.value)
 
 const adminLabel = computed(() => admin.value?.displayName || admin.value?.name || '当前管理员')
-const adminInitial = computed(() => adminLabel.value.slice(0, 1))
-const previewAvatar = computed(() => chatAvatar.value || admin.value?.avatar || '')
+const peerLabel = computed(() => peerName.value || '访客')
+/** Single character stand-in when the other side has no picture of its own. */
+const peerInitial = computed(() => (peerName.value ? peerName.value.slice(0, 1) : '访'))
+
+/**
+ * What the visitor's popup will actually put next to the messages. Showing it here
+ * saves a round of guessing when the account has no picture of its own.
+ */
+const avatarHint = computed(() => {
+  if (chatAvatar.value) {
+    return '访客看到的是设置里指定的那张头像。'
+  }
+  if (admin.value?.avatar) {
+    return '访客看到的是当前账号的头像。'
+  }
+  return '当前账号还没有头像，访客那边显示名字首字；在个人资料里上传头像，或到插件设置里指定一张。'
+})
 
 watch(
   () => props.record,
@@ -164,11 +183,15 @@ async function copy(text: string | null, tag: string) {
 
 async function loadAdmin() {
   try {
-    const { data } = await axios.get('/apis/uc.api.halo.run/v1alpha1/users/-')
+    // The console's own current-user endpoint, which is also what Halo's avatar
+    // component reads: the picture lives in the account's spec.avatar.
+    const { data } = await axios.get('/apis/api.console.halo.run/v1alpha1/users/-')
+    const user = data?.user || data || {}
+    const spec = user.spec || {}
     admin.value = {
-      name: data.name || '',
-      displayName: data.displayName || data.name || '',
-      avatar: data.avatar || '',
+      name: user.metadata?.name || data.name || '',
+      displayName: spec.displayName || data.displayName || user.metadata?.name || '',
+      avatar: spec.avatar || data.avatar || '',
     }
   } catch (e) {
     admin.value = null
@@ -185,6 +208,9 @@ async function loadChat() {
     })
     chatMessages.value = data.messages || []
     chatAvatar.value = data.avatar || ''
+    peerName.value = data.peerName || ''
+    peerAvatar.value = data.peerAvatar || ''
+    peerIp.value = data.ip || ''
     chatEnabled.value = data.enabled !== false
     chatLoaded.value = true
   } catch (e) {
@@ -252,10 +278,19 @@ async function send() {
   }
 }
 
+/**
+ * Enter sends, Alt+Enter breaks the line. A keystroke that belongs to an input method
+ * is left alone, otherwise picking a candidate with Enter would send half a sentence.
+ */
 function onDraftKeydown(event: KeyboardEvent) {
-  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-    send()
+  if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) {
+    return
   }
+  if (event.altKey) {
+    return
+  }
+  event.preventDefault()
+  send()
 }
 
 onMounted(() => {
@@ -305,14 +340,16 @@ onUnmounted(() => {
 
           <div v-if="chatOpen" class="os-chat__panel">
             <div class="os-chat__me">
-              <img v-if="previewAvatar" class="os-chat__avatar" :src="previewAvatar" alt="" />
+              <img v-if="peerAvatar" class="os-chat__avatar" :src="peerAvatar" alt="" />
               <span v-else class="os-chat__avatar os-chat__avatar--fallback">
-                {{ adminInitial }}
+                {{ peerInitial }}
               </span>
               <div class="os-chat__me-text">
-                <strong>{{ adminLabel }}</strong>
+                <strong>{{ peerLabel }}</strong>
+                <span v-if="peerIp">（{{ peerIp }}）</span>
               </div>
             </div>
+            <p class="os-chat__hint">{{ avatarHint }}</p>
 
             <div v-if="!chatLoaded" class="os-chat__empty">加载中…</div>
             <ul v-else-if="chatMessages.length" ref="listRef" class="os-chat__list">
@@ -323,7 +360,7 @@ onUnmounted(() => {
               >
                 <div class="os-chat__bubble">{{ message.text }}</div>
                 <div class="os-chat__meta">
-                  {{ message.direction === 'admin' ? adminLabel : message.authorName || '访客' }} ·
+                  {{ message.direction === 'admin' ? message.authorName || adminLabel : peerLabel }} ·
                   {{ fmtRelative(message.sentAt) }}
                   <span v-if="message.direction === 'visitor' && message.pageTitle">
                     · 在「{{ message.pageTitle }}」
@@ -340,7 +377,7 @@ onUnmounted(() => {
               class="os-chat__input"
               rows="3"
               maxlength="1000"
-              placeholder="输入要发送的文本内容，Ctrl / ⌘ + Enter 发送"
+              placeholder="输入要发送的文本内容，Enter 发送，Alt + Enter 换行"
               @keydown="onDraftKeydown"
             />
             <div class="os-chat__actions">
@@ -800,6 +837,13 @@ onUnmounted(() => {
       line-height: 1.5;
       color: #6b7280;
     }
+  }
+
+  &__hint {
+    margin: 0 0 0.25rem;
+    font-size: 0.6875rem;
+    line-height: 1.6;
+    color: #9ca3af;
   }
 
   &__list {

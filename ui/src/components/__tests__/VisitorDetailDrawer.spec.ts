@@ -92,29 +92,39 @@ function chatMessage(seq: number, direction: string, text: string, authorName: s
 }
 
 beforeEach(() => {
+  // The project does not configure clearMocks, so each test starts from a clean slate
+  // by hand; otherwise "was called" assertions see the previous test's requests.
+  vi.clearAllMocks()
   scrollTop = 0
   mocked.get.mockImplementation((url: string) => {
     if (url.includes('/chat-messages')) {
       return Promise.resolve({
         data: {
+          visitorKey: 'v-1',
           ip: '10.0.0.9',
           enabled: true,
-          // No configured picture, so the panel previews the account's own avatar.
+          peerName: '小明',
+          peerAvatar: 'https://blog.fufu520.cn/upload/xiaoming.webp',
+          // No configured picture, so the visitor sees whatever the account has.
           avatar: null,
           messages: [
             chatMessage(1, 'admin', '你好'),
-            chatMessage(2, 'visitor', '在的', null),
+            chatMessage(2, 'visitor', '在的', '小明'),
             chatMessage(3, 'admin', '看到你在看这篇博客'),
           ],
         },
       })
     }
-    if (url.includes('uc.api.halo.run')) {
+    if (url.includes('api.console.halo.run')) {
       return Promise.resolve({
         data: {
-          name: 'fufu',
-          displayName: 'fufu大王',
-          avatar: 'https://blog.fufu520.cn/upload/fufu-account.webp',
+          user: {
+            metadata: { name: 'fufu' },
+            spec: {
+              displayName: 'fufu大王',
+              avatar: 'https://blog.fufu520.cn/upload/fufu-account.webp',
+            },
+          },
         },
       })
     }
@@ -124,14 +134,74 @@ beforeEach(() => {
 })
 
 describe('the console conversation panel', () => {
-  it('shows the signed in administrator by name and nothing more', async () => {
+  it('heads the panel with the signed in visitor and their address', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
     const block = wrapper.find('.os-chat__me-text')
-    expect(block.text()).toContain('fufu大王')
+    expect(block.text()).toContain('小明')
+    expect(block.text()).toContain('10.0.0.9')
+    expect(wrapper.find('img.os-chat__avatar').attributes('src')).toBe(
+      'https://blog.fufu520.cn/upload/xiaoming.webp',
+    )
     expect(block.text()).not.toContain('对方看到的是')
-    expect(block.element.children.length).toBe(1)
+  })
+
+  it('heads the panel with 访客 and a single character when nobody is signed in', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/chat-messages')) {
+        return Promise.resolve({
+          data: {
+            visitorKey: 'v-1',
+            ip: '10.0.0.9',
+            enabled: true,
+            peerName: null,
+            peerAvatar: null,
+            avatar: null,
+            messages: [chatMessage(2, 'visitor', '在的', null)],
+          },
+        })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const block = wrapper.find('.os-chat__me-text')
+    expect(block.text()).toContain('访客')
+    expect(block.text()).toContain('10.0.0.9')
+    expect(wrapper.find('img.os-chat__avatar').exists()).toBe(false)
+    expect(wrapper.find('.os-chat__avatar--fallback').text()).toBe('访')
+  })
+
+  it('names each administrator on their own messages', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/chat-messages')) {
+        return Promise.resolve({
+          data: {
+            visitorKey: 'v-1',
+            ip: '10.0.0.9',
+            enabled: true,
+            peerName: null,
+            peerAvatar: null,
+            avatar: null,
+            messages: [
+              chatMessage(1, 'admin', '第一条', '甲管理员'),
+              chatMessage(2, 'admin', '第二条', '乙管理员'),
+            ],
+          },
+        })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const meta = wrapper.findAll('.os-chat__meta').map((node) => node.text())
+    expect(meta[0]).toContain('甲管理员')
+    expect(meta[1]).toContain('乙管理员')
   })
 
   it('opens on the newest message rather than the top of the thread', async () => {
@@ -141,42 +211,70 @@ describe('the console conversation panel', () => {
     expect(scrollTop).toBe(600)
   })
 
-  it('previews the account avatar when no picture is configured', async () => {
+  it('tells the reader which picture the visitor will see', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    expect(wrapper.find('img.os-chat__avatar').attributes('src')).toBe(
-      'https://blog.fufu520.cn/upload/fufu-account.webp',
-    )
+    expect(wrapper.find('.os-chat__hint').text()).toContain('当前账号的头像')
   })
 
-  it('prefers a configured picture over the account avatar', async () => {
+  it('explains when the account has no picture at all', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/chat-messages')) {
         return Promise.resolve({
           data: {
             visitorKey: 'v-1',
             enabled: true,
-            avatar: 'https://blog.fufu520.cn/upload/one-for-everyone.webp',
-            messages: [chatMessage(1, 'admin', '你好')],
+            avatar: null,
+            peerName: null,
+            peerAvatar: null,
+            messages: [],
           },
         })
       }
-      return Promise.resolve({
-        data: {
-          name: 'fufu',
-          displayName: 'fufu大王',
-          avatar: 'https://blog.fufu520.cn/upload/fufu-account.webp',
-        },
-      })
+      if (url.includes('api.console.halo.run')) {
+        return Promise.resolve({
+          data: { user: { metadata: { name: 'fufu' }, spec: { displayName: 'fufu大王' } } },
+        })
+      }
+      return Promise.resolve({ data: {} })
     })
 
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    expect(wrapper.find('img.os-chat__avatar').attributes('src')).toBe(
-      'https://blog.fufu520.cn/upload/one-for-everyone.webp',
+    expect(wrapper.find('.os-chat__hint').text()).toContain('还没有头像')
+  })
+
+  it('sends on Enter and keeps Alt+Enter for a newline', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    await wrapper.find('.os-chat__input').setValue('看到你在看这篇博客')
+    await wrapper.find('.os-chat__input').trigger('keydown', { key: 'Enter', altKey: true })
+    await flushPromises()
+    expect(mocked.post).not.toHaveBeenCalled()
+
+    await wrapper.find('.os-chat__input').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(mocked.post).toHaveBeenCalledWith(
+      expect.stringContaining('/chat-send'),
+      expect.objectContaining({ text: '看到你在看这篇博客' }),
     )
+  })
+
+  it('leaves Enter alone while an input method is composing', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    await wrapper.find('.os-chat__input').setValue('正在输入')
+    const input = wrapper.find('.os-chat__input').element as HTMLTextAreaElement
+    const composing = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
+    Object.defineProperty(composing, 'isComposing', { value: true })
+    input.dispatchEvent(composing)
+    await flushPromises()
+
+    expect(mocked.post).not.toHaveBeenCalled()
   })
 
   it('scrolls back to the end after sending', async () => {
@@ -213,14 +311,17 @@ describe('the console conversation panel', () => {
     expect(wrapper.find('.os-chat').exists()).toBe(true)
   })
 
-  it('names a signed in visitor instead of calling them a visitor', async () => {
+  it('labels the visitor side with the peer name from the server', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/chat-messages')) {
         return Promise.resolve({
           data: {
             visitorKey: 'v-1',
+            ip: '10.0.0.9',
             enabled: true,
             avatar: '',
+            peerName: '小明',
+            peerAvatar: '',
             messages: [
               chatMessage(1, 'admin', '你好'),
               chatMessage(2, 'visitor', '在的', '小明'),
@@ -229,7 +330,7 @@ describe('the console conversation panel', () => {
         })
       }
       return Promise.resolve({
-        data: { name: 'fufu', displayName: 'fufu大王', avatar: '' },
+        data: { user: { metadata: { name: 'fufu' }, spec: { displayName: 'fufu大王' } } },
       })
     })
 

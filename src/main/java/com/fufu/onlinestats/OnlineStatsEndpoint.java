@@ -767,12 +767,23 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             }
             boolean showIp = settings.showIpInConsoleOrDefault();
             List<ChatMessageService.ChatEntry> thread = chatService.thread(key);
-            String ip = thread.isEmpty() ? "" : String.valueOf(thread.get(0).ip());
+            String ip = "";
+            for (ChatMessageService.ChatEntry entry : thread) {
+                if (entry.ip() != null && !entry.ip().isBlank()) {
+                    ip = entry.ip();
+                    break;
+                }
+            }
+            ChatMessageService.Author peer = chatService.peer(key);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("visitorKey", key);
-            payload.put("ip", showIp || ip.isBlank() ? ip : maskIp(ip));
+            payload.put("ip", showIp ? ip : maskIp(ip));
             payload.put("enabled", settings.chatEnabledOrDefault());
-            // Null means "the panel should show the signed in account's own avatar".
+            // Who the conversation is with, so the panel can name them rather than
+            // calling everybody "访客".
+            payload.put("peerName", peer.name());
+            payload.put("peerAvatar", peer.avatar());
+            // The picture the visitor sees on console messages, if one was chosen.
             payload.put("avatar", settings.chatAvatarOverride());
             payload.put("messages", thread.stream()
                 .map(OnlineStatsEndpoint::toAdminChatView).toList());
@@ -803,12 +814,12 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                         .bodyValue(Map.of("error", "missing key or text"));
                 }
                 return chatService.resolveAdmin().flatMap(admin -> {
-                    // The signed in account's own picture is used unless the setting
-                    // names one for everybody.
+                    // An explicitly configured picture wins; otherwise the account's
+                    // own avatar is used, and an account without one leaves the field
+                    // empty so the visitor sees a lettered avatar instead of a
+                    // stranger's face.
                     String configured = settings.chatAvatarOverride();
-                    String avatar = configured != null ? configured
-                        : (admin.avatar() != null && !admin.avatar().isBlank()
-                            ? admin.avatar() : OnlineStatsSettings.DEFAULT_CHAT_AVATAR);
+                    String avatar = configured != null ? configured : admin.avatar();
                     ChatMessageService.ChatEntry entry = chatService.append(key, null,
                         "admin", text, admin.name(), avatar, null, null);
                     Map<String, Object> payload = new LinkedHashMap<>();

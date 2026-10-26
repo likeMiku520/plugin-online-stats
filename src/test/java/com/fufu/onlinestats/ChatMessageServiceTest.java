@@ -159,4 +159,42 @@ class ChatMessageServiceTest {
             service.stop();
         }
     }
+
+    @Test
+    void theConsoleSeesWhoItIsTalkingTo() {
+        ChatMessageService service = service();
+        say(service, KEY, "admin", "hi");
+        assertEquals(null, service.peer(KEY).name(), "no reply yet, so no identity");
+
+        service.append(KEY, "10.0.0.1", "visitor", "hello", "小明",
+            "https://blog.fufu520.cn/upload/x.webp", null, null);
+
+        assertEquals("小明", service.peer(KEY).name());
+        assertEquals("https://blog.fufu520.cn/upload/x.webp", service.peer(KEY).avatar());
+    }
+
+    @Test
+    void anAnonymousReplyLeavesThePeerUnnamed() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "visitor", "hello", null, null, null, null);
+
+        assertEquals(null, service.peer(KEY).name());
+        assertEquals(null, service.peer(OTHER_KEY).name(), "another device has its own peer");
+    }
+
+    @Test
+    void eachMessageKeepsTheAuthorItWasWrittenWith() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "admin", "first", "甲管理员",
+            "https://blog.fufu520.cn/upload/a.webp", null, null);
+        service.append(KEY, "10.0.0.1", "admin", "second", "乙管理员",
+            "https://blog.fufu520.cn/upload/b.webp", null, null);
+
+        List<ChatMessageService.ChatEntry> thread = service.thread(KEY);
+
+        assertEquals("甲管理员", thread.get(0).authorName());
+        assertEquals("https://blog.fufu520.cn/upload/a.webp", thread.get(0).authorAvatar());
+        assertEquals("乙管理员", thread.get(1).authorName());
+        assertEquals("https://blog.fufu520.cn/upload/b.webp", thread.get(1).authorAvatar());
+    }
 }

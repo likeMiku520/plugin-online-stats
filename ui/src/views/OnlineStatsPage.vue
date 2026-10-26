@@ -9,6 +9,15 @@ import {
   type UaInfo,
 } from '../utils/visitor'
 
+interface UnreadItem {
+  visitorKey: string
+  ip: string
+  unread: number
+  total: number
+  lastText: string
+  lastAt: number
+}
+
 interface Stats {
   online: number
   onlineHumans?: number
@@ -56,6 +65,9 @@ const rowBusy = reactive<Record<string, boolean>>({})
 const rowError = reactive<Record<string, string>>({})
 const unreadTotal = ref(0)
 const unreadByKey = ref<Record<string, number>>({})
+const unreadItems = ref<UnreadItem[]>([])
+const unreadOpen = ref(false)
+const unreadBusy = ref('')
 
 let pollTimer: number | undefined
 let searchTimer: number | undefined
@@ -76,21 +88,63 @@ const unreadIps = computed(() =>
 
 /**
  * Unread counts per device, so a reply from a visitor shows up on the row it belongs
- * to instead of only inside the conversation panel.
+ * to instead of only inside the conversation panel. The rows themselves are kept too,
+ * which is what the detail list under the reminder shows.
  */
 async function loadUnread() {
   try {
     const { data } = await axios.get(`${api}/chat-conversations`)
     unreadTotal.value = data.unreadTotal || 0
     const counts: Record<string, number> = {}
+    const pending: UnreadItem[] = []
     for (const item of data.items || []) {
       if (item.unread > 0 && item.visitorKey) {
         counts[item.visitorKey] = item.unread
+        pending.push({
+          visitorKey: item.visitorKey,
+          ip: item.ip || '',
+          unread: item.unread,
+          total: item.total || 0,
+          lastText: item.lastText || '',
+          lastAt: item.lastAt || 0,
+        })
       }
     }
     unreadByKey.value = counts
+    unreadItems.value = pending
+    if (!pending.length) {
+      unreadOpen.value = false
+    }
   } catch (e) {
     /* the endpoint is admin only; keep the previous state on any failure */
+  }
+}
+
+/**
+ * Opens the conversation of an unread row. Records outside the current page are not in
+ * the list, so they are fetched by their device key first.
+ */
+async function openUnread(entry: UnreadItem) {
+  const known = items.value.find((item) => item.name === entry.visitorKey)
+  if (known) {
+    openDetail(known)
+    unreadOpen.value = false
+    return
+  }
+  if (unreadBusy.value) {
+    return
+  }
+  unreadBusy.value = entry.visitorKey
+  try {
+    const { data } = await axios.get<RecordView>(`${api}/records/${entry.visitorKey}`)
+    if (data && data.name) {
+      openDetail(data)
+      unreadOpen.value = false
+    }
+  } catch (e) {
+    /* the row may have been cleaned up meanwhile; the next poll drops it */
+  } finally {
+    unreadBusy.value = ''
   }
 }
 
@@ -347,12 +401,40 @@ onUnmounted(() => {
     </div>
 
     <div v-if="unreadTotal > 0" class="os-unread">
-      <span class="os-unread__dot" />
-      <span class="os-unread__text">
-        有 {{ unreadTotal }} 条未读访客消息<template v-if="unreadIps.length">
-          （{{ unreadIps.slice(0, 3).join('、') }}{{ unreadIps.length > 3 ? ' 等' : '' }}）</template
-        >，点对应记录的「更多」查看。
-      </span>
+      <div class="os-unread__row">
+        <span class="os-unread__dot" />
+        <span class="os-unread__text">
+          有 {{ unreadTotal }} 条未读访客消息<template v-if="unreadIps.length">
+            （{{ unreadIps.slice(0, 3).join('、') }}{{ unreadIps.length > 3 ? ' 等' : '' }}）</template
+          >，点对应记录的「更多」查看。
+        </span>
+        <button
+          class="os-unread__toggle"
+          type="button"
+          :aria-expanded="unreadOpen"
+          @click="unreadOpen = !unreadOpen"
+        >
+          {{ unreadOpen ? '收起' : '详细' }}
+        </button>
+      </div>
+
+      <ul v-if="unreadOpen" class="os-unread__list">
+        <li v-for="entry in unreadItems" :key="entry.visitorKey">
+          <button
+            class="os-unread__item"
+            type="button"
+            :disabled="unreadBusy === entry.visitorKey"
+            @click="openUnread(entry)"
+          >
+            <span class="os-unread__who">
+              {{ entry.ip || '未知地址' }}
+              <span class="os-unread__count">{{ entry.unread }} 条未读</span>
+            </span>
+            <span class="os-unread__last">{{ entry.lastText }}</span>
+            <span class="os-unread__time">{{ fmtRelative(entry.lastAt) }}</span>
+          </button>
+        </li>
+      </ul>
     </div>
 
     <div class="os-page__card">
@@ -881,9 +963,6 @@ onUnmounted(() => {
 }
 
 .os-unread {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
   padding: 0.625rem 0.875rem;
   margin-bottom: 0.75rem;
   font-size: 0.8125rem;
@@ -891,6 +970,12 @@ onUnmounted(() => {
   background: #fef2f2;
   border: 1px solid #fecaca;
   border-radius: 0.5rem;
+
+  &__row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
 
   &__dot {
     flex: none;
@@ -902,7 +987,85 @@ onUnmounted(() => {
   }
 
   &__text {
+    flex: 1;
+    min-width: 0;
     line-height: 1.6;
+  }
+
+  &__toggle {
+    flex: none;
+    padding: 0.1875rem 0.5rem;
+    font-size: 0.75rem;
+    color: #b91c1c;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid #fecaca;
+    border-radius: 0.375rem;
+
+    &:hover {
+      background: #fee2e2;
+    }
+  }
+
+  &__list {
+    padding: 0;
+    margin: 0.625rem 0 0;
+    list-style: none;
+    border-top: 1px solid #fecaca;
+  }
+
+  &__item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    width: 100%;
+    padding: 0.5rem 0.125rem;
+    font-size: 0.75rem;
+    color: #7f1d1d;
+    text-align: left;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid rgb(254 202 202 / 0.7);
+
+    &:hover {
+      background: rgb(254 226 226 / 0.6);
+    }
+
+    &:disabled {
+      cursor: progress;
+      opacity: 0.6;
+    }
+  }
+
+  &__who {
+    flex: none;
+    max-width: 12rem;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__count {
+    margin-left: 0.375rem;
+    font-weight: 400;
+    color: #dc2626;
+  }
+
+  &__last {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: #991b1b;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__time {
+    flex: none;
+    color: #b91c1c;
+    opacity: 0.8;
   }
 }
 

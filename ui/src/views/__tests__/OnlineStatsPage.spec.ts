@@ -77,6 +77,7 @@ function conversations(unread: number) {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   mocked.get.mockImplementation((url: string) => {
     if (url.includes('/records')) {
       return Promise.resolve({
@@ -110,6 +111,75 @@ describe('the visitor list', () => {
 
     expect(wrapper.find('.os-more').classes()).toContain('os-more--unread')
     expect(wrapper.find('.os-more__badge').text()).toBe('2')
+  })
+
+  it('lists every unread conversation behind the detail button', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/records/')) {
+        return Promise.resolve({ data: { ...record(), name: 'v-9', ip: '10.0.0.77' } })
+      }
+      if (url.includes('/records')) {
+        return Promise.resolve({
+          data: {
+            items: [record()],
+            total: 1,
+            stats: { online: 1, total: 1, todayNew: 1, loaded: true },
+          },
+        })
+      }
+      if (url.includes('/chat-conversations')) {
+        return Promise.resolve({
+          data: {
+            loaded: true,
+            enabled: true,
+            unreadTotal: 3,
+            items: [
+              {
+                visitorKey: 'v-1',
+                ip: '10.0.0.9',
+                unread: 2,
+                total: 3,
+                lastText: '在的',
+                lastDirection: 'visitor',
+                lastAt: Date.now(),
+              },
+              {
+                visitorKey: 'v-9',
+                ip: '10.0.0.77',
+                unread: 1,
+                total: 1,
+                lastText: '另一个访客',
+                lastDirection: 'visitor',
+                lastAt: Date.now(),
+              },
+            ],
+          },
+        })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(OnlineStatsPage, { attachTo: document.body })
+    await flushPromises()
+
+    expect(wrapper.find('.os-unread__list').exists()).toBe(false)
+    await wrapper.find('.os-unread__toggle').trigger('click')
+
+    const rows = wrapper.findAll('.os-unread__item')
+    expect(rows.length).toBe(2)
+    expect(rows[0].text()).toContain('10.0.0.9')
+    expect(rows[0].text()).toContain('2 条未读')
+    expect(rows[1].text()).toContain('另一个访客')
+
+    // A row on the current page opens straight away; one that is not on the page is
+    // fetched by its device key first.
+    await rows[1].trigger('click')
+    await flushPromises()
+    expect(mocked.get.mock.calls.some((call) => String(call[0]).includes('/records/v-9'))).toBe(
+      true,
+    )
+    expect(wrapper.find('.os-drawer').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('stays quiet when everything has been read', async () => {

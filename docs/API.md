@@ -162,7 +162,9 @@ window.__ONLINE_STATS__ = {
   "visitorKey": "v-0123456789abcdef",
   "ip": "1.2.3.4",
   "enabled": true,
-  "avatar": "https://blog.fufu520.cn/upload/fufu_touming.webp",
+  "peerName": "小明",
+  "peerAvatar": "https://blog.fufu520.cn/upload/xiaoming.webp",
+  "avatar": null,
   "messages": [
     {
       "seq": 12,
@@ -178,6 +180,10 @@ window.__ONLINE_STATS__ = {
   ]
 }
 ```
+
+`peerName` / `peerAvatar` 是访客那一侧的身份：访客正登录着 Halo 就有值，否则为 `null`，界面显示「访客」加一个单字头像。`avatar` 是设置里为所有管理员指定的那张图，没指定就是 `null`，此时访客看到的是发消息那个账号自己的头像。
+
+每条消息都带着写入时的 `authorName` / `authorAvatar`，所以两个管理员先后回复同一个访客时，访客看到的仍是各自的名字和头像，不会统一成最后一个人的。
 
 ## 后台发送消息
 
