@@ -8,10 +8,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutorService;
@@ -62,6 +64,7 @@ public class ChatMessageService {
     private static final int MAX_CONVERSATIONS = 200;
     private static final int MAX_PENDING_WRITES = 500;
     private static final Duration WRITE_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration LOAD_TIMEOUT = Duration.ofSeconds(10);
     private static final String ADMIN_FALLBACK_NAME = "博主";
 
     private final ReactiveExtensionClient client;
@@ -87,6 +90,36 @@ public class ChatMessageService {
         });
         writer = executor;
         loadAll();
+    }
+
+    /**
+     * Reads what is already stored before the first message can be written.
+     *
+     * <p>The order counter has to be seeded from storage first: a message written while
+     * the load was still running reused a sequence number that already existed, which
+     * both hid an older message behind the newcomer and let the read flag of the stored
+     * copy come back.</p>
+     */
+    private void loadAll() {
+        try {
+            List<ChatMessage> stored = client
+                .listAll(ChatMessage.class, ListOptions.builder().build(), Sort.unsorted())
+                .collectList()
+                .block(LOAD_TIMEOUT);
+            applyLoaded(stored == null ? List.of() : stored);
+        } catch (IllegalStateException blockingNotAllowed) {
+            // Running on a thread that must not block; fall back to the asynchronous
+            // load, which is still correct as long as it finishes before a write.
+            log.debug("Loading chat messages asynchronously: {}", blockingNotAllowed.toString());
+            client.listAll(ChatMessage.class, ListOptions.builder().build(), Sort.unsorted())
+                .collectList()
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe(this::applyLoaded,
+                    error -> log.warn("Failed to load chat messages", error));
+        } catch (Exception error) {
+            log.warn("Failed to load chat messages", error);
+            loaded = true;
+        }
     }
 
     public void stop() {
@@ -302,6 +335,28 @@ public class ChatMessageService {
     }
 
     /**
+     * Marks every conversation as seen. Reading a thread normally does this one
+     * conversation at a time; this clears the reminder in one go for an administrator
+     * who has already gone through the replies.
+     */
+    public int markAllReadByAdmin() {
+        int marked = 0;
+        for (String key : conversations.keySet()) {
+            Deque<ChatEntry> thread = conversations.get(key);
+            if (thread == null) {
+                continue;
+            }
+            for (ChatEntry entry : thread) {
+                if (entry.markReadByAdmin()) {
+                    marked++;
+                    persist(entry);
+                }
+            }
+        }
+        return marked;
+    }
+
+    /**
      * Drops messages older than the visitor retention window, in memory and in storage,
      * so a conversation cannot outlive the history it belongs to.
      */
@@ -326,47 +381,66 @@ public class ChatMessageService {
         }
     }
 
-    private void loadAll() {
-        List<ChatMessage> collected = new ArrayList<>();
-        client.listAll(ChatMessage.class, ListOptions.builder().build(), Sort.unsorted())
-            .onErrorResume(error -> {
-                log.debug("Listing chat messages failed: {}", error.toString());
-                return Flux.empty();
-            })
-            .subscribeOn(Schedulers.boundedElastic())
-            .subscribe(collected::add, error -> log.warn("Failed to load chat messages", error),
-                () -> {
-                    Map<String, List<ChatEntry>> grouped = new LinkedHashMap<>();
-                    long highest = 0L;
-                    for (ChatMessage message : collected) {
-                        ChatEntry entry = toEntry(message);
-                        if (entry == null) {
-                            continue;
-                        }
-                        grouped.computeIfAbsent(entry.key(), ignored -> new ArrayList<>())
-                            .add(entry);
-                        highest = Math.max(highest, entry.seq());
-                    }
-                    for (Map.Entry<String, List<ChatEntry>> group : grouped.entrySet()) {
-                        List<ChatEntry> thread = group.getValue();
-                        thread.sort(Comparator.comparingLong(ChatEntry::seq));
-                        Deque<ChatEntry> deque = new ConcurrentLinkedDeque<>();
-                        int from = Math.max(0, thread.size() - MAX_PER_CONVERSATION);
-                        for (int i = from; i < thread.size(); i++) {
-                            deque.addLast(thread.get(i));
-                        }
-                        for (int i = 0; i < from; i++) {
-                            delete(thread.get(i));
-                        }
-                        if (!deque.isEmpty()) {
-                            conversations.put(group.getKey(), deque);
-                        }
-                    }
-                    seq.set(highest);
-                    loaded = true;
-                    trimConversations();
-                    log.debug("Loaded {} chat conversations", conversations.size());
-                });
+    private void applyLoaded(List<ChatMessage> collected) {
+        Map<String, List<ChatEntry>> grouped = new LinkedHashMap<>();
+        long highest = 0L;
+        for (ChatMessage message : collected) {
+            ChatEntry entry = toEntry(message);
+            if (entry == null) {
+                continue;
+            }
+            grouped.computeIfAbsent(entry.key(), ignored -> new ArrayList<>()).add(entry);
+            highest = Math.max(highest, entry.seq());
+        }
+        for (Map.Entry<String, List<ChatEntry>> group : grouped.entrySet()) {
+            List<ChatEntry> thread = group.getValue();
+            thread.sort(Comparator.comparingLong(ChatEntry::seq));
+            int from = Math.max(0, thread.size() - MAX_PER_CONVERSATION);
+            for (int i = 0; i < from; i++) {
+                delete(thread.get(i));
+            }
+            mergeLoaded(group.getKey(), thread.subList(from, thread.size()));
+        }
+        seq.set(Math.max(seq.get(), highest));
+        loaded = true;
+        trimConversations();
+        log.debug("Loaded {} chat conversations", conversations.size());
+    }
+
+    /**
+     * Folds stored messages into a conversation that may already be live.
+     *
+     * <p>An administrator can open a thread before this load finishes; marking it read
+     * at that moment would be undone by replacing the conversation wholesale, which is
+     * what made a reminder come back after a restart. Entries already in memory win, so
+     * the read state is never downgraded.</p>
+     */
+    private void mergeLoaded(String key, List<ChatEntry> stored) {
+        Deque<ChatEntry> live = conversations.get(key);
+        if (live == null) {
+            Deque<ChatEntry> deque = new ConcurrentLinkedDeque<>();
+            stored.forEach(deque::addLast);
+            if (!deque.isEmpty()) {
+                conversations.put(key, deque);
+            }
+            return;
+        }
+        Set<Long> present = new HashSet<>();
+        for (ChatEntry entry : live) {
+            present.add(entry.seq());
+        }
+        List<ChatEntry> merged = new ArrayList<>(live);
+        for (ChatEntry entry : stored) {
+            if (!present.contains(entry.seq())) {
+                merged.add(entry);
+            }
+        }
+        merged.sort(Comparator.comparingLong(ChatEntry::seq));
+        while (merged.size() > MAX_PER_CONVERSATION) {
+            merged.remove(0);
+        }
+        live.clear();
+        merged.forEach(live::addLast);
     }
 
     private static ChatEntry toEntry(ChatMessage message) {
@@ -436,8 +510,26 @@ public class ChatMessageService {
             client.update(existing).block(WRITE_TIMEOUT);
             entry.markPersisted();
         } catch (Exception updateError) {
-            log.debug("Failed to update chat message {}: {}", entry.name(),
+            // A lost update would bring a read reply back as unread after a restart, so
+            // the flag is written once more against the freshly stored revision.
+            log.debug("Updating chat message {} failed, retrying: {}", entry.name(),
                 updateError.toString());
+            try {
+                ChatMessage latest =
+                    client.fetch(ChatMessage.class, entry.name()).block(WRITE_TIMEOUT);
+                if (latest == null || latest.getSpec() == null) {
+                    return;
+                }
+                latest.getSpec().setReadByAdmin(entry.readByAdmin());
+                latest.getSpec().setText(entry.text());
+                latest.getSpec().setAuthorName(entry.authorName());
+                latest.getSpec().setAuthorAvatar(entry.authorAvatar());
+                client.update(latest).block(WRITE_TIMEOUT);
+                entry.markPersisted();
+            } catch (Exception retryError) {
+                log.debug("Chat message {} still not updated: {}", entry.name(),
+                    retryError.toString());
+            }
         }
     }
 

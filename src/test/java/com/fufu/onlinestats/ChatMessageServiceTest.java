@@ -136,6 +136,68 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void markingEverythingReadClearsEveryConversation() {
+        ChatMessageService service = service();
+        say(service, KEY, "visitor", "one");
+        say(service, KEY, "admin", "answer");
+        say(service, KEY, "visitor", "two");
+        say(service, OTHER_KEY, "visitor", "other device");
+        assertEquals(3, service.unreadTotal());
+
+        int marked = service.markAllReadByAdmin();
+
+        assertEquals(3, marked);
+        assertEquals(0, service.unreadTotal());
+        assertEquals(0, service.markAllReadByAdmin(), "nothing left to mark");
+    }
+
+    @Test
+    void aRestartKeepsWhatWasAlreadyRead() throws Exception {
+        ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
+        ChatMessage read = stored("c-1", 1L, System.currentTimeMillis(), "from the visitor");
+        read.getSpec().setDirection("visitor");
+        read.getSpec().setReadByAdmin(true);
+        ChatMessage unread = stored("c-2", 2L, System.currentTimeMillis(), "a newer reply");
+        unread.getSpec().setDirection("visitor");
+        unread.getSpec().setReadByAdmin(false);
+        doReturn(Flux.just(read, unread))
+            .when(client).listAll(eq(ChatMessage.class), any(ListOptions.class),
+                any(Sort.class));
+
+        ChatMessageService service = new ChatMessageService(client, null);
+        service.start();
+        try {
+            assertTrue(service.isLoaded());
+            assertEquals(1, service.unreadTotal(), "only the reply that was never read");
+        } finally {
+            service.stop();
+        }
+    }
+
+    @Test
+    void aMessageWrittenAfterARestartDoesNotReuseAStoredSequence() throws Exception {
+        ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
+        doReturn(Flux.just(
+            stored("c-1", 1L, System.currentTimeMillis(), "older"),
+            stored("c-2", 2L, System.currentTimeMillis(), "newer")))
+            .when(client).listAll(eq(ChatMessage.class), any(ListOptions.class),
+                any(Sort.class));
+
+        ChatMessageService service = new ChatMessageService(client, null);
+        service.start();
+        try {
+            ChatMessageService.ChatEntry entry =
+                service.append(KEY, "10.0.0.1", "admin", "after the restart", "fufu", null,
+                    null, null);
+
+            assertEquals(3L, entry.seq(), "the counter continues where storage stopped");
+            assertEquals(3, service.thread(KEY).size());
+        } finally {
+            service.stop();
+        }
+    }
+
+    @Test
     void messagesOlderThanTheRetentionWindowAreDropped() throws Exception {
         ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
         doReturn(Flux.just(

@@ -121,6 +121,25 @@ async function loadUnread() {
 }
 
 /**
+ * Clears every unread reply at once. Reading a conversation marks it read on its own,
+ * so this is for the reminder that is left over after going through the list.
+ */
+async function markAllRead() {
+  if (unreadBusy.value) {
+    return
+  }
+  unreadBusy.value = 'all'
+  try {
+    await axios.post(`${api}/chat-read-all`)
+    await loadUnread()
+  } catch (e) {
+    /* keep the reminder; the next poll retries */
+  } finally {
+    unreadBusy.value = ''
+  }
+}
+
+/**
  * Opens the conversation of an unread row. Records outside the current page are not in
  * the list, so they are fetched by their device key first.
  */
@@ -415,6 +434,14 @@ onUnmounted(() => {
           @click="unreadOpen = !unreadOpen"
         >
           {{ unreadOpen ? '收起' : '详细' }}
+        </button>
+        <button
+          class="os-unread__toggle os-unread__toggle--quiet"
+          type="button"
+          :disabled="unreadBusy === 'all'"
+          @click="markAllRead()"
+        >
+          全部已读
         </button>
       </div>
 
@@ -1004,6 +1031,15 @@ onUnmounted(() => {
 
     &:hover {
       background: #fee2e2;
+    }
+
+    &--quiet {
+      color: #991b1b;
+
+      &:disabled {
+        cursor: progress;
+        opacity: 0.6;
+      }
     }
   }
 

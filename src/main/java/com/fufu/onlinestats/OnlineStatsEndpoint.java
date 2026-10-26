@@ -115,6 +115,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/chat-conversations", this::getChatConversations)
             .GET("/chat-messages", this::getChatMessages)
             .POST("/chat-send", this::postChatSend)
+            .POST("/chat-read-all", this::postChatReadAll)
             .build();
     }
 
@@ -753,6 +754,16 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 .map(conversation -> toConversationView(conversation, showIp)).toList());
             return ServerResponse.ok().bodyValue(payload);
         });
+    }
+
+    /** Clears the unread reminder for every conversation at once. */
+    private Mono<ServerResponse> postChatReadAll(ServerRequest request) {
+        int marked = chatService.markAllReadByAdmin();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ok", true);
+        payload.put("marked", marked);
+        payload.put("unreadTotal", chatService.unreadTotal());
+        return ServerResponse.ok().bodyValue(payload);
     }
 
     private Mono<ServerResponse> getChatMessages(ServerRequest request) {

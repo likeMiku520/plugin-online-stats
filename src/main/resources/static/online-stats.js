@@ -301,8 +301,11 @@
   function buildAvatar(className, name, avatar) {
     var label = name ? String(name) : '管理员';
     var fallback = label.slice(0, 1);
-    var source = avatar ? String(avatar) : '';
-    if (source.indexOf('https://') === 0 || source.indexOf('http://') === 0) {
+    var source = avatar ? String(avatar).trim() : '';
+    /* Any non-empty value is used as a picture: Halo accounts can carry a full URL, a
+     * site relative path or a data URL, and the browser resolves all three. Requiring
+     * an absolute URL here quietly turned every one of those into a letter. */
+    if (source) {
       var image = chatElement('img', className);
       image.src = source;
       image.alt = '';

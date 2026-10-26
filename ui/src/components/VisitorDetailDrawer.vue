@@ -855,10 +855,10 @@ onUnmounted(() => {
     align-items: flex-start;
     max-width: 90%;
 
+    /* The markup is [message, author], so a plain row already puts the author's
+     * picture on the right of the message they wrote. */
     &.is-mine {
       align-self: flex-end;
-      /* The author's picture sits to the right of their own message. */
-      flex-direction: row-reverse;
     }
 
     &.is-theirs {

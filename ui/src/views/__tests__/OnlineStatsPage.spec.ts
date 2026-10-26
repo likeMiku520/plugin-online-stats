@@ -182,6 +182,44 @@ describe('the visitor list', () => {
     wrapper.unmount()
   })
 
+  it('clears every reminder at once', async () => {
+    let unread = 2
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/records')) {
+        return Promise.resolve({
+          data: {
+            items: [record()],
+            total: 1,
+            stats: { online: 1, total: 1, todayNew: 1, loaded: true },
+          },
+        })
+      }
+      if (url.includes('/chat-conversations')) {
+        return Promise.resolve(conversations(unread))
+      }
+      return Promise.resolve({ data: {} })
+    })
+    mocked.post.mockImplementation((url: string) => {
+      if (url.includes('/chat-read-all')) {
+        unread = 0
+        return Promise.resolve({ data: { ok: true, marked: 2, unreadTotal: 0 } })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+    expect(wrapper.find('.os-unread').exists()).toBe(true)
+
+    const buttons = wrapper.findAll('.os-unread__toggle')
+    expect(buttons.length).toBe(2)
+    await buttons[1].trigger('click')
+    await flushPromises()
+
+    expect(mocked.post).toHaveBeenCalledWith(expect.stringContaining('/chat-read-all'))
+    expect(wrapper.find('.os-unread').exists()).toBe(false)
+  })
+
   it('stays quiet when everything has been read', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/records')) {

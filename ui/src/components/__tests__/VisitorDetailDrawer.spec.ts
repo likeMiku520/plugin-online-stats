@@ -253,8 +253,12 @@ describe('the console conversation panel', () => {
     expect(authors[1].attributes('src')).toBe('https://blog.fufu520.cn/upload/b.webp')
     // An account without a picture falls back to the first character of its name.
     expect(authors[2].text()).toBe('丙')
-    // Their own messages are the right hand column.
-    expect(authors[0].element.closest('.os-chat__item')?.classList).toContain('is-mine')
+    // Their own messages are the right hand column, and the author is the last child
+    // so a plain row places the picture to the right of the message.
+    const item = authors[0].element.closest('.os-chat__item')
+    expect(item?.classList).toContain('is-mine')
+    expect(item?.lastElementChild?.classList).toContain('os-chat__author')
+    expect(item?.firstElementChild?.classList).toContain('os-chat__body')
   })
 
   it('sends on Enter and keeps Alt+Enter for a newline', async () => {
