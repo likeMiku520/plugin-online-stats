@@ -9,6 +9,16 @@ export interface UaInfo {
   bot?: string
 }
 
+/** One page the visitor opened, with the time spent on it. */
+export interface PageVisit {
+  url: string | null
+  title: string | null
+  enteredAt: number | null
+  /** Null while the page is still open. */
+  leftAt: number | null
+  durationMs: number | null
+}
+
 export interface RecordView {
   name: string
   ip: string | null
@@ -50,6 +60,10 @@ export interface RecordView {
   deviceMemory: string | null
   connection: string | null
   online: boolean
+  /** Pages opened, oldest first; the last one is the page in front of them now. */
+  pageVisits?: PageVisit[]
+  /** How long they have been on the page they are looking at now. */
+  currentPageMs?: number | null
 }
 
 export interface LocationView {

@@ -261,21 +261,36 @@ describe('the console conversation panel', () => {
     expect(item?.firstElementChild?.classList).toContain('os-chat__body')
   })
 
-  it('sends on Enter and keeps Alt+Enter for a newline', async () => {
+  it('sends on Enter and breaks the line only with the button', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
     await wrapper.find('.os-chat__input').setValue('看到你在看这篇博客')
-    await wrapper.find('.os-chat__input').trigger('keydown', { key: 'Enter', altKey: true })
+    const breakButton = wrapper.findAll('.os-chat__actions .os-geo-btn')[0]
+    expect(breakButton.text()).toBe('换行')
+
+    await breakButton.trigger('click')
     await flushPromises()
     expect(mocked.post).not.toHaveBeenCalled()
+    expect((wrapper.find('.os-chat__input').element as HTMLTextAreaElement).value).toBe(
+      '看到你在看这篇博客\n',
+    )
 
-    await wrapper.find('.os-chat__input').trigger('keydown', { key: 'Enter' })
+    // Enter always sends, whatever modifier is held. The draft is trimmed on the way
+    // out, so the trailing newline does not reach the server.
+    await wrapper.find('.os-chat__input').trigger('keydown', { key: 'Enter', altKey: true })
     await flushPromises()
     expect(mocked.post).toHaveBeenCalledWith(
       expect.stringContaining('/chat-send'),
       expect.objectContaining({ text: '看到你在看这篇博客' }),
     )
+  })
+
+  it('has no placeholder in the composer', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    expect(wrapper.find('.os-chat__input').attributes('placeholder')).toBeUndefined()
   })
 
   it('leaves Enter alone while an input method is composing', async () => {
@@ -292,13 +307,87 @@ describe('the console conversation panel', () => {
     expect(mocked.post).not.toHaveBeenCalled()
   })
 
+  it('lists the pages the visitor opened with how long they stayed', async () => {
+    const visited = {
+      ...record(),
+      pageVisits: [
+        {
+          url: '/archives/1',
+          title: '第一篇',
+          enteredAt: 1_760_000_000_000,
+          leftAt: 1_760_000_120_000,
+          durationMs: 120_000,
+        },
+        {
+          url: '/archives/2',
+          title: '第二篇',
+          enteredAt: 1_760_000_120_000,
+          leftAt: null,
+          durationMs: 30_000,
+        },
+      ],
+      currentPageMs: 30_000,
+    }
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: visited } })
+    await flushPromises()
+
+    expect(wrapper.find('.os-visits').exists()).toBe(false)
+    const toggle = wrapper.findAll('.os-link')[0]
+    expect(toggle.text()).toBe('展开明细')
+    await toggle.trigger('click')
+
+    const rows = wrapper.findAll('.os-visits li')
+    expect(rows.length).toBe(2)
+    expect(rows[0].text()).toContain('第一篇')
+    expect(rows[0].text()).toContain('2 分')
+    expect(rows[0].text()).toContain('离开')
+    expect(rows[1].text()).toContain('还在这页')
+  })
+
+  it('shows what the visitor is doing right now', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const sections = wrapper.findAll('.os-section h4').map((node) => node.text())
+    expect(sections).toContain('当前在做什么')
+  })
+
+  it('marks whether the visitor has read each console message', async () => {
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/chat-messages')) {
+        return Promise.resolve({
+          data: {
+            visitorKey: 'v-1',
+            enabled: true,
+            peerName: null,
+            peerAvatar: null,
+            messages: [
+              { ...chatMessage(1, 'admin', '看过了'), seenByVisitor: true },
+              { ...chatMessage(2, 'admin', '还没看'), seenByVisitor: false },
+              { ...chatMessage(3, 'visitor', '在的', null), readByAdmin: true },
+            ],
+          },
+        })
+      }
+      return Promise.resolve({ data: {} })
+    })
+
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const states = wrapper.findAll('.os-chat__read').map((node) => node.text())
+    expect(states[0]).toContain('访客已读')
+    expect(states[1]).toContain('访客未读')
+    expect(states[2]).toContain('已读')
+  })
+
   it('scrolls back to the end after sending', async () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
     scrollTop = 0
     await wrapper.find('.os-chat__input').setValue('看到你在看这篇博客')
-    await wrapper.find('.os-chat .os-geo-btn').trigger('click')
+    await wrapper.find('.os-chat__send').trigger('click')
     await flushPromises()
 
     expect(mocked.post).toHaveBeenCalledWith(
@@ -354,7 +443,7 @@ describe('the console conversation panel', () => {
 
     const meta = wrapper.findAll('.os-chat__meta').map((node) => node.text())
     expect(meta.some((line) => line.includes('小明'))).toBe(true)
-    expect(meta.some((line) => line.includes('访客'))).toBe(false)
+    expect(meta.every((line) => !line.startsWith('访客 ·'))).toBe(true)
   })
 
   it('hides the whole conversation section once the plugin setting turns it off', async () => {

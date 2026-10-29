@@ -13,7 +13,9 @@ interface ChatMessage {
   authorAvatar: string | null
   pageUrl: string | null
   pageTitle: string | null
-  readByAdmin: boolean
+  /** Console messages: read by the administrator. Replies: seen by the visitor. */
+  readByAdmin?: boolean
+  seenByVisitor?: boolean
 }
 
 interface AdminInfo {
@@ -41,6 +43,7 @@ const chatLoaded = ref(false)
 /** null until the first reply from the server, so nothing flashes before it is known. */
 const chatEnabled = ref<boolean | null>(null)
 const listRef = ref<HTMLElement | null>(null)
+const draftRef = ref<HTMLTextAreaElement | null>(null)
 let scrollOnNextLoad = true
 const admin = ref<AdminInfo | null>(null)
 /** Who the conversation is with: a signed in account, or an anonymous visitor. */
@@ -58,6 +61,25 @@ const adminLabel = computed(() => admin.value?.displayName || admin.value?.name 
 const peerLabel = computed(() => peerName.value || '访客')
 /** Single character stand-in when the other side has no picture of its own. */
 const peerInitial = computed(() => (peerName.value ? peerName.value.slice(0, 1) : '访'))
+
+/** Page history, newest last; the last entry is the page in front of them now. */
+const pageVisits = computed(() => detail.value.pageVisits || [])
+
+/**
+ * Read state as the reader cares about it: their own messages say whether the other
+ * side has seen them, incoming messages say whether they have been read here.
+ */
+function readState(message: ChatMessage): string {
+  if (message.direction === 'admin') {
+    return message.seenByVisitor ? '访客已读' : '访客未读'
+  }
+  return message.readByAdmin ? '已读' : '未读'
+}
+const visitsOpen = ref(false)
+const enteredAtOfCurrentPage = computed(() => {
+  const visits = pageVisits.value
+  return visits.length ? visits[visits.length - 1].enteredAt : null
+})
 
 watch(
   () => props.record,
@@ -106,7 +128,7 @@ function fmtRelative(ms: number | null | undefined): string {
   return `${Math.floor(diff / 86_400_000)} 天前`
 }
 
-function fmtDuration(ms: number | null): string {
+function fmtDuration(ms: number | null | undefined): string {
   if (!ms || ms <= 0) {
     return '—'
   }
@@ -260,18 +282,35 @@ async function send() {
 }
 
 /**
- * Enter sends, Alt+Enter breaks the line. A keystroke that belongs to an input method
- * is left alone, otherwise picking a candidate with Enter would send half a sentence.
+ * Enter sends; a newline is only possible through the button, so a line break cannot be
+ * typed by accident in the middle of writing. A keystroke that belongs to an input
+ * method is left alone, otherwise picking a candidate with Enter would send half a
+ * sentence.
  */
 function onDraftKeydown(event: KeyboardEvent) {
   if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229) {
     return
   }
-  if (event.altKey) {
-    return
-  }
   event.preventDefault()
   send()
+}
+
+/** Inserts a newline at the caret, which is the only way to break a line here. */
+function insertLineBreak() {
+  const input = draftRef.value
+  const text = chatDraft.value
+  if (!input) {
+    chatDraft.value = `${text}\n`
+    return
+  }
+  const start = input.selectionStart ?? text.length
+  const end = input.selectionEnd ?? start
+  chatDraft.value = `${text.slice(0, start)}\n${text.slice(end)}`
+  nextTick(() => {
+    const caret = start + 1
+    input.setSelectionRange(caret, caret)
+    input.focus()
+  })
 }
 
 onMounted(() => {
@@ -346,6 +385,14 @@ onUnmounted(() => {
                     <span v-if="message.direction === 'visitor' && message.pageTitle">
                       · 在「{{ message.pageTitle }}」
                     </span>
+                    <span
+                      :class="[
+                        'os-chat__read',
+                        readState(message) === '已读' ? 'is-read' : 'is-unread',
+                      ]"
+                    >
+                      · {{ readState(message) }}
+                    </span>
                   </div>
                 </div>
                 <template v-if="message.direction === 'admin'">
@@ -366,18 +413,21 @@ onUnmounted(() => {
             </div>
 
             <textarea
+              ref="draftRef"
               v-model="chatDraft"
               class="os-chat__input"
               rows="3"
               maxlength="1000"
-              placeholder="输入要发送的文本内容，Enter 发送，Alt + Enter 换行"
               @keydown="onDraftKeydown"
             />
             <div class="os-chat__actions">
               <span v-if="chatError" class="os-chat__error">{{ chatError }}</span>
               <span v-else class="os-chat__hint">仅支持纯文本，最多 1000 字</span>
+              <button class="os-geo-btn os-geo-btn--ghost" type="button" @click="insertLineBreak">
+                换行
+              </button>
               <button
-                class="os-geo-btn"
+                class="os-geo-btn os-chat__send"
                 type="button"
                 :disabled="chatSending || !chatDraft.trim()"
                 @click="send()"
@@ -522,6 +572,26 @@ onUnmounted(() => {
         </section>
 
         <section class="os-section">
+          <h4>当前在做什么</h4>
+          <dl class="os-kv">
+            <dt>状态</dt>
+            <dd>{{ detail.online ? '在线，页面还开着' : '离线，最后一次心跳在 ' + fmtRelative(detail.lastSeenAt) }}</dd>
+            <dt>正在看</dt>
+            <dd>{{ detail.pageTitle || '—' }}</dd>
+            <dt>页面地址</dt>
+            <dd class="os-break">{{ detail.pageUrl || '—' }}</dd>
+            <dt>停留</dt>
+            <dd>{{ fmtDuration(detail.currentPageMs ?? null) }}</dd>
+            <dt>进站时间</dt>
+            <dd>{{ fmtTime(detail.firstSeenAt) }}</dd>
+            <dt>打开页面</dt>
+            <dd>{{ fmtTime(enteredAtOfCurrentPage) }}</dd>
+            <dt>来源页面</dt>
+            <dd class="os-break">{{ detail.referer || '直接访问' }}</dd>
+          </dl>
+        </section>
+
+        <section class="os-section">
           <h4>访问行为</h4>
           <dl class="os-kv">
             <dt>首次访问</dt>
@@ -533,20 +603,39 @@ onUnmounted(() => {
             <dt>访问次数</dt>
             <dd>{{ detail.visitCount || 0 }} 次</dd>
             <dt>浏览页面数</dt>
-            <dd>{{ detail.pageViewCount || 0 }} 个</dd>
+            <dd>
+              {{ detail.pageViewCount || 0 }} 个
+              <button
+                v-if="pageVisits.length"
+                class="os-link"
+                type="button"
+                @click="visitsOpen = !visitsOpen"
+              >
+                {{ visitsOpen ? '收起' : '展开明细' }}
+              </button>
+            </dd>
             <dt>入口页面</dt>
             <dd>{{ detail.firstPageTitle || '—' }}</dd>
             <dt>入口地址</dt>
             <dd class="os-break">{{ detail.firstPageUrl || '—' }}</dd>
-            <dt>当前页面</dt>
-            <dd>{{ detail.pageTitle || '—' }}</dd>
-            <dt>当前地址</dt>
-            <dd class="os-break">{{ detail.pageUrl || '—' }}</dd>
-            <dt>来源页面</dt>
-            <dd class="os-break">{{ detail.referer || '直接访问' }}</dd>
             <dt>首次来源</dt>
             <dd class="os-break">{{ detail.firstReferer || '直接访问' }}</dd>
           </dl>
+
+          <ol v-if="visitsOpen && pageVisits.length" class="os-visits">
+            <li v-for="(visit, index) in pageVisits" :key="visit.enteredAt || index">
+              <div class="os-visits__head">
+                <span class="os-visits__title">{{ visit.title || visit.url || '—' }}</span>
+                <span class="os-visits__time">{{ fmtDuration(visit.durationMs) }}</span>
+              </div>
+              <div class="os-visits__url">{{ visit.url || '' }}</div>
+              <div class="os-visits__meta">
+                打开 {{ fmtTime(visit.enteredAt) }} ·
+                {{ visit.leftAt ? '离开 ' + fmtTime(visit.leftAt) : '还在这页' }}
+              </div>
+            </li>
+          </ol>
+          <p v-else-if="visitsOpen" class="os-muted">还没有页面记录，等下一次心跳。</p>
         </section>
 
         <section class="os-section">
@@ -724,6 +813,74 @@ onUnmounted(() => {
   }
 }
 
+.os-link {
+  padding: 0 0.25rem;
+  margin-left: 0.375rem;
+  font-size: 0.6875rem;
+  color: #39C5BB;
+  cursor: pointer;
+  background: none;
+  border: 0;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.os-visits {
+  padding: 0.5rem 0 0;
+  margin: 0.5rem 0 0;
+  list-style: none;
+  border-top: 1px dashed #e5e7eb;
+
+  li {
+    padding: 0.375rem 0;
+    border-bottom: 1px dashed #f1f5f9;
+
+    &:last-child {
+      border-bottom: 0;
+    }
+  }
+
+  &__head {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  &__title {
+    font-size: 0.75rem;
+    color: #111827;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__time {
+    flex: none;
+    font-size: 0.6875rem;
+    color: #39C5BB;
+  }
+
+  &__url {
+    font-size: 0.625rem;
+    color: #6b7280;
+    word-break: break-all;
+  }
+
+  &__meta {
+    font-size: 0.625rem;
+    color: #9ca3af;
+  }
+}
+
+.os-geo-btn--ghost {
+  color: #4b5563;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
 .os-geo-btn {
   padding: 0.375rem 0.875rem;
   font-size: 0.8125rem;
@@ -836,6 +993,18 @@ onUnmounted(() => {
     font-size: 0.6875rem;
     line-height: 1.6;
     color: #9ca3af;
+  }
+
+  &__read {
+    margin-left: 0.125rem;
+
+    &.is-read {
+      color: #10b981;
+    }
+
+    &.is-unread {
+      color: #dc2626;
+    }
   }
 
   &__list {

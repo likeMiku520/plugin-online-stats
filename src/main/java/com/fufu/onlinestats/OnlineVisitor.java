@@ -1,5 +1,9 @@
 package com.fufu.onlinestats;
 
+import java.util.ArrayList;
+import java.util.LinkedList;
+import java.util.List;
+
 /**
  * A live visitor kept in memory. The registry keys entries by a device fingerprint
  * (IP + User-Agent) so multiple tabs of the same browser collapse into one visitor.
@@ -8,10 +12,16 @@ public class OnlineVisitor {
 
     private static final long MAX_GAP_MS = 5L * 60 * 1000;
 
+    /** How many page visits are kept per visitor; the console lists the newest. */
+    private static final int MAX_PAGE_VISITS = 50;
+
     private final String key;
     private final String ip;
     private final String userAgent;
     private final long firstSeenAt;
+
+    /** Pages opened during this visit, oldest first. */
+    private final LinkedList<VisitorRecord.PageVisit> pageVisits = new LinkedList<>();
 
     private volatile String visitorId;
     private volatile String postName;
@@ -65,11 +75,19 @@ public class OnlineVisitor {
         if (url != null && !url.isBlank() && !url.equals(pageUrl)) {
             if (pageUrl != null) {
                 pageViewCount++;
+                closePageVisit(now);
             }
             pageUrl = url;
+            openPageVisit(url, now);
+        } else if (url != null && !url.isBlank()) {
+            // Still on the same page: the heartbeat is what tells us how long for.
+            touchPageVisit(now);
         }
         if (title != null && !title.isBlank()) {
             pageTitle = title;
+            if (!pageVisits.isEmpty()) {
+                pageVisits.getLast().setTitle(title);
+            }
         }
         if (ref != null && !ref.isBlank() && !ref.equals(referer)) {
             referer = ref;
@@ -111,6 +129,53 @@ public class OnlineVisitor {
     public void markResumed() {
         sessionCount++;
         dirty = true;
+    }
+
+    private void openPageVisit(String url, long now) {
+        VisitorRecord.PageVisit visit = new VisitorRecord.PageVisit();
+        visit.setUrl(url);
+        visit.setTitle(pageTitle);
+        visit.setEnteredAt(now);
+        synchronized (pageVisits) {
+            pageVisits.addLast(visit);
+            while (pageVisits.size() > MAX_PAGE_VISITS) {
+                pageVisits.removeFirst();
+            }
+        }
+    }
+
+    private void touchPageVisit(long now) {
+        synchronized (pageVisits) {
+            if (pageVisits.isEmpty()) {
+                return;
+            }
+            VisitorRecord.PageVisit visit = pageVisits.getLast();
+            visit.setLeftAt(now);
+            if (visit.getEnteredAt() != null) {
+                visit.setDurationMs(Math.max(0L, now - visit.getEnteredAt()));
+            }
+        }
+    }
+
+    /** Marks the page as left, so the console can show when it ended. */
+    private void closePageVisit(long now) {
+        synchronized (pageVisits) {
+            if (pageVisits.isEmpty()) {
+                return;
+            }
+            VisitorRecord.PageVisit visit = pageVisits.getLast();
+            visit.setLeftAt(now);
+            if (visit.getEnteredAt() != null) {
+                visit.setDurationMs(Math.max(0L, now - visit.getEnteredAt()));
+            }
+        }
+    }
+
+    /** Snapshot for the console; the newest entries come last. */
+    public List<VisitorRecord.PageVisit> pageVisits() {
+        synchronized (pageVisits) {
+            return new ArrayList<>(pageVisits);
+        }
     }
 
     public void markFlushed(int pageViews, long onlineMs, int sessions, long now) {

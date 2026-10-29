@@ -555,7 +555,27 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             visitCount, pageViewCount, totalOnlineMs,
             spec.getScreen(), spec.getViewport(), spec.getTimezone(), spec.getLanguage(),
             spec.getPlatform(), spec.getCpuCores(), spec.getDeviceMemory(), spec.getConnection(),
-            online);
+            online,
+            live != null ? live.pageVisits() : spec.getPageVisits(),
+            currentPageMs(live != null ? live.pageVisits() : spec.getPageVisits(),
+                System.currentTimeMillis()));
+    }
+
+    /**
+     * How long the visitor has been on the page they are looking at now. The newest
+     * entry is the open one; anything else means they already moved on.
+     */
+    private static Long currentPageMs(List<VisitorRecord.PageVisit> visits, long now) {
+        if (visits == null || visits.isEmpty()) {
+            return null;
+        }
+        VisitorRecord.PageVisit last = visits.get(visits.size() - 1);
+        if (last.getEnteredAt() == null) {
+            return null;
+        }
+        long end = last.getDurationMs() != null && last.getLeftAt() != null
+            ? last.getEnteredAt() + last.getDurationMs() : now;
+        return Math.max(0L, end - last.getEnteredAt());
     }
 
     /**
@@ -585,7 +605,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             visitor.getScreen(), visitor.getViewport(), visitor.getTimezone(),
             visitor.getLanguage(), visitor.getPlatform(), visitor.getCpuCores(),
             visitor.getDeviceMemory(), visitor.getConnection(),
-            true);
+            true,
+            visitor.pageVisits(),
+            currentPageMs(visitor.pageVisits(), System.currentTimeMillis()));
     }
 
     private LiveView toLiveView(OnlineVisitor visitor, boolean showIp) {
@@ -976,6 +998,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         if ("admin".equals(entry.direction())) {
             view.put("authorName", entry.authorName());
             view.put("authorAvatar", entry.authorAvatar());
+        } else {
+            // The visitor's own message: whether the console has read it is theirs to see.
+            view.put("readByAdmin", entry.readByAdmin());
         }
         return view;
     }
@@ -987,6 +1012,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         view.put("pageUrl", entry.pageUrl());
         view.put("pageTitle", entry.pageTitle());
         view.put("readByAdmin", entry.readByAdmin());
+        // For a console message this says whether the visitor has actually seen it.
+        view.put("seenByVisitor", entry.seenByVisitor());
         return view;
     }
 
@@ -1115,6 +1142,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                              String cpuCores,
                              String deviceMemory,
                              String connection,
-                             boolean online) {
+                             boolean online,
+                             List<VisitorRecord.PageVisit> pageVisits,
+                             Long currentPageMs) {
     }
 }

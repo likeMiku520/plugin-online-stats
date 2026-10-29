@@ -32,6 +32,8 @@ public class VisitorRecordService {
     private static final Logger log = LoggerFactory.getLogger(VisitorRecordService.class);
     private static final long FLUSH_INTERVAL_SECONDS = 20L;
     private static final long CLEANUP_INTERVAL_SECONDS = 1800L;
+    /** How many page visits one record keeps; the console shows the newest. */
+    private static final int MAX_PAGE_VISITS = 50;
 
     private final Map<String, VisitorRecord> index = new ConcurrentHashMap<>();
     private final ReactiveExtensionClient client;
@@ -159,6 +161,43 @@ public class VisitorRecordService {
         return info;
     }
 
+    /**
+     * Folds the live page visits into what was already stored. A visit is identified by
+     * its start time, so repeated flushes update the entry instead of appending copies.
+     */
+    private void mergePageVisits(VisitorRecord.Spec spec,
+                                 List<VisitorRecord.PageVisit> live) {
+        if (live == null || live.isEmpty()) {
+            return;
+        }
+        if (spec.getPageVisits() == null) {
+            spec.setPageVisits(new ArrayList<>());
+        }
+        List<VisitorRecord.PageVisit> stored = spec.getPageVisits();
+        for (VisitorRecord.PageVisit visit : live) {
+            VisitorRecord.PageVisit existing = null;
+            for (VisitorRecord.PageVisit candidate : stored) {
+                if (visit.getEnteredAt() != null
+                    && visit.getEnteredAt().equals(candidate.getEnteredAt())) {
+                    existing = candidate;
+                    break;
+                }
+            }
+            if (existing == null) {
+                stored.add(visit);
+            } else {
+                existing.setLeftAt(visit.getLeftAt());
+                existing.setDurationMs(visit.getDurationMs());
+                if (visit.getTitle() != null) {
+                    existing.setTitle(visit.getTitle());
+                }
+            }
+        }
+        while (stored.size() > MAX_PAGE_VISITS) {
+            stored.remove(0);
+        }
+    }
+
     private void flush(OnlineVisitor visitor, long now) {
         VisitorRecord record = index.get(visitor.getKey());
         String name = visitor.getKey();
@@ -234,6 +273,7 @@ public class VisitorRecordService {
         if (visitor.getConnection() != null) {
             spec.setConnection(visitor.getConnection());
         }
+        mergePageVisits(spec, visitor.pageVisits());
 
         if (save(record, isNew)) {
             visitor.markFlushed(visitor.getPageViewCount(), visitor.getTotalOnlineMs(),
