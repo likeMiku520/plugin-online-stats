@@ -643,7 +643,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private Mono<ServerResponse> getArticleDetail(ServerRequest request) {
         String postName = request.pathVariable("postName");
         return fetchSettings().flatMap(settings -> {
-            Map<String, Object> detail = queryService.articleDetail(postName, settings, 200);
+            Map<String, Object> detail =
+                queryService.articleDetail(postName, settings, 200, scopeOf(request));
             if (detail == null) {
                 return ServerResponse.notFound().build();
             }
@@ -672,7 +673,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 return ServerResponse.badRequest().bodyValue(Map.of("error", "missing value"));
             }
             return ServerResponse.ok()
-                .bodyValue(queryService.sourceDetail(settings, days, dimension, value));
+                .bodyValue(queryService.sourceDetail(settings, days, dimension, value,
+                    scopeOf(request)));
         });
     }
 

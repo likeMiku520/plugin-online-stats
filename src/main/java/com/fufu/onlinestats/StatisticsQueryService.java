@@ -336,7 +336,9 @@ public class StatisticsQueryService {
             }
             String key = switch (dimension) {
                 case "system" -> uaLabel(record.getSpec().getUserAgent(), "os");
-                case "referer" -> refererOf(record.getSpec());
+                // The aggregates store the bare host, so a filtered view has to use the
+                // same label or the row stops matching its drilldown.
+                case "referer" -> StatsAggregationService.refererHost(refererOf(record.getSpec()));
                 case "country" -> record.getSpec().getCountry();
                 default -> uaLabel(record.getSpec().getUserAgent(), "browser");
             };
@@ -526,6 +528,11 @@ public class StatisticsQueryService {
      */
     public Map<String, Object> articleDetail(String postName, OnlineStatsSettings settings,
                                              int limit) {
+        return articleDetail(postName, settings, limit, Scope.ALL);
+    }
+
+    public Map<String, Object> articleDetail(String postName, OnlineStatsSettings settings,
+                                             int limit, Scope scope) {
         Post post = stats.post(postName);
         ArticleStat article = stats.article(postName);
         if (post == null && article == null) {
@@ -533,12 +540,14 @@ public class StatisticsQueryService {
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("article", articleView(post, article, stats.officialByPost().get(postName),
-            settings));
+            settings, scope));
 
+        Set<String> accepted = acceptedKeys(scope);
         List<Map<String, Object>> visitors = new ArrayList<>();
         if (article != null) {
             ArticleStat.Spec spec = article.getSpec();
             spec.getVisitorViews().entrySet().stream()
+                .filter(entry -> !scope.filtered() || accepted.contains(entry.getKey()))
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .limit(limit <= 0 ? 100 : limit)
                 .forEach(entry -> {
@@ -560,6 +569,12 @@ public class StatisticsQueryService {
     /** Drill-down for one browser / system / referrer value. */
     public Map<String, Object> sourceDetail(OnlineStatsSettings settings, int days,
                                             String dimension, String value) {
+        return sourceDetail(settings, days, dimension, value, Scope.ALL);
+    }
+
+    /** Who contributed one source row, optionally restricted to one kind of visitor. */
+    public Map<String, Object> sourceDetail(OnlineStatsSettings settings, int days,
+                                            String dimension, String value, Scope scope) {
         List<DailyStat> window = window(days, null, null);
         long views = 0;
         Map<String, Long> perVisitor = new LinkedHashMap<>();
@@ -584,6 +599,12 @@ public class StatisticsQueryService {
                 }
             }
             visitorIps.putAll(day.getSpec().getVisitorIps());
+        }
+        if (scope.filtered()) {
+            // Only the visitors that belong to the selected view, and the count follows
+            // them instead of the unfiltered daily total.
+            perVisitor.keySet().retainAll(acceptedKeys(scope));
+            views = perVisitor.values().stream().mapToLong(Long::longValue).sum();
         }
         List<Map<String, Object>> visitors = new ArrayList<>();
         perVisitor.entrySet().stream()

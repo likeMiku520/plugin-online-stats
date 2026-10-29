@@ -850,13 +850,26 @@
     }
   }
 
-  /** Title badge, which works without any permission. */
+  /**
+   * Title badge, which works without any permission. The badge replaces the page title
+   * with what happened, and the original title comes back once nothing is waiting.
+   */
+  var titleBase = null;
+
   function badgeTitle(count) {
-    var base = document.title.replace(/^（\d+）/, '');
-    if (!base && count <= 0) {
+    if (count > 0) {
+      if (titleBase === null) {
+        titleBase = document.title.replace(/^（\d+）/, '');
+      }
+      document.title = '（' + count + '）管理员给你发来消息';
       return;
     }
-    document.title = count > 0 ? '（' + count + '）' + base : base;
+    if (titleBase !== null) {
+      document.title = titleBase;
+      titleBase = null;
+    } else {
+      document.title = document.title.replace(/^（\d+）[^（]*$/, '');
+    }
   }
 
   function clearTitleBadge() {

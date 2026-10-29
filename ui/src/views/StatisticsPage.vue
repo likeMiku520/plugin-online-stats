@@ -190,7 +190,9 @@ async function openArticle(postName: string, title: string | null) {
     rows: [],
   }
   try {
-    const { data } = await axios.get(`${api}/statistics/articles/${postName}`)
+    const { data } = await axios.get(`${api}/statistics/articles/${postName}`, {
+      params: { type: scope.value },
+    })
     const rows = (data.visitors || []).map(
       (v: { visitorKey: string; views: number; durationMs: number; lastSeenAt: number | null; ip: string | null }) => ({
         label: v.ip || v.visitorKey,
@@ -230,7 +232,7 @@ async function openSource(dimension: string, value: string) {
   }
   try {
     const { data } = await axios.get(`${api}/statistics/sources/detail`, {
-      params: { dimension, value, days: 30 },
+      params: { dimension, value, days: 30, type: scope.value },
     })
     const rows = (data.items || []).map(
       (v: { visitorKey: string; views: number; ip: string | null }) => ({
