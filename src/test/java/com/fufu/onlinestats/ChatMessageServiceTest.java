@@ -198,6 +198,42 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void aMessageWrittenToAnAbsentVisitorWaitsForTheNextVisit() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "admin", "while nobody was here", "fufu", null,
+            null, null);
+
+        assertEquals(1, service.pendingForVisitor(KEY), "never displayed, so it waits");
+        assertEquals(0, service.pendingForVisitor(OTHER_KEY));
+
+        service.markSeenByVisitor(KEY);
+
+        assertEquals(0, service.pendingForVisitor(KEY));
+        assertEquals(1, service.thread(KEY).size(), "the message is still there");
+    }
+
+    @Test
+    void aVisitorReplyIsNotWaitingToBeDelivered() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "visitor", "hello", null, null, null, null);
+
+        assertEquals(0, service.pendingForVisitor(KEY));
+    }
+
+    @Test
+    void clearingTheUnreadReminderDoesNotCountAsDelivered() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "visitor", "a reply", null, null, null, null);
+        service.append(KEY, "10.0.0.1", "admin", "the answer", "fufu", null, null, null);
+
+        service.markAllReadByAdmin();
+
+        assertEquals(0, service.unreadTotal(), "nothing left for the console to read");
+        assertEquals(1, service.pendingForVisitor(KEY),
+            "the visitor still has not seen the console's answer");
+    }
+
+    @Test
     void messagesOlderThanTheRetentionWindowAreDropped() throws Exception {
         ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
         doReturn(Flux.just(

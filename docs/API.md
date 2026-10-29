@@ -242,6 +242,30 @@ window.__ONLINE_STATS__ = {
 { "ok": true, "marked": 2, "unreadTotal": 0 }
 ```
 
+## 访客已看到对话
+
+`POST /chat-seen`（公开）
+
+访客页面把对话展示出来之后调用，服务端据此记下这条后台消息已经送达，返回本次标记的条数。
+
+```json
+{ "ok": true, "marked": 1 }
+```
+
+`GET /chat-inbox` 会返回 `pending`，表示这台设备还有多少条后台消息从未展示过。页面据此决定加载时要不要直接把对话弹出来，所以访客离开页面期间发出的消息不会丢。
+
+## 统计视图的真人 / 机器人筛选
+
+`/statistics/overview`、`/statistics/trend`、`/statistics/articles`、`/statistics/sources` 都接受 `type`：
+
+| 取值 | 说明 |
+| --- | --- |
+| `all`（默认） | 全部访客，直接读聚合好的计数 |
+| `human` | 只看真人 |
+| `bot` | 只看机器人 |
+
+判定来自访客记录里的 `bot` 标记。聚合数据里的来源分布是扁平计数、事后拆不开，所以 `human` / `bot` 视图下这些数字按已保留的访客记录重新归组；官方浏览量是 Halo 自己的计数器，不随 `type` 变化。
+
 ## 当前在线访客
 
 `GET /visitors`（管理员）

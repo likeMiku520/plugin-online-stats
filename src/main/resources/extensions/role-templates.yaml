@@ -8,7 +8,7 @@ metadata:
     rbac.authorization.halo.run/aggregate-to-anonymous: "true"
 rules:
   - apiGroups: ["online-stats.halo.run"]
-    resources: ["heartbeat", "online-count", "online-pages", "online-stats", "chat-inbox", "chat-reply"]
+    resources: ["heartbeat", "online-count", "online-pages", "online-stats", "chat-inbox", "chat-reply", "chat-seen"]
     verbs: ["get", "list", "create"]
 ---
 apiVersion: v1alpha1

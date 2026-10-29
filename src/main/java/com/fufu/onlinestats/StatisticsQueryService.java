@@ -7,9 +7,11 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 import run.halo.app.core.extension.content.Post;
 
@@ -23,15 +25,89 @@ public class StatisticsQueryService {
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     private final StatsAggregationService stats;
+    private final VisitorRecordService records;
 
-    public StatisticsQueryService(StatsAggregationService stats) {
+    public StatisticsQueryService(StatsAggregationService stats,
+                                  VisitorRecordService records) {
         this.stats = stats;
+        this.records = records;
+    }
+
+    /** Which visitors a figure is counted over. */
+    public enum Scope {
+        ALL, HUMAN, BOT;
+
+        public static Scope of(String raw) {
+            if (raw == null) {
+                return ALL;
+            }
+            return switch (raw.trim().toLowerCase(java.util.Locale.ROOT)) {
+                case "human", "humans" -> HUMAN;
+                case "bot", "bots", "robot" -> BOT;
+                default -> ALL;
+            };
+        }
+
+        public boolean filtered() {
+            return this != ALL;
+        }
+    }
+
+    /**
+     * The device keys a figure should count. Robot detection lives on the visitor
+     * record, so a filtered view is computed from the per-visitor numbers the
+     * aggregates already keep rather than from the flat counters, which cannot be
+     * split after the fact.
+     */
+    private Set<String> acceptedKeys(Scope scope) {
+        if (!scope.filtered()) {
+            return Set.of();
+        }
+        boolean wantBots = scope == Scope.BOT;
+        Set<String> keys = new HashSet<>();
+        for (VisitorRecord record : records.list()) {
+            if (record.getMetadata() == null || record.getMetadata().getName() == null) {
+                continue;
+            }
+            boolean bot = record.getSpec() != null && Boolean.TRUE.equals(record.getSpec().getBot());
+            if (bot == wantBots) {
+                keys.add(record.getMetadata().getName());
+            }
+        }
+        return keys;
+    }
+
+    private static long sumAccepted(Map<String, Long> byVisitor, Set<String> accepted) {
+        long total = 0;
+        for (Map.Entry<String, Long> entry : byVisitor.entrySet()) {
+            if (accepted.contains(entry.getKey())) {
+                total += entry.getValue() == null ? 0L : entry.getValue();
+            }
+        }
+        return total;
+    }
+
+    private static int countAccepted(Map<String, ?> byVisitor, Set<String> accepted) {
+        int total = 0;
+        for (String key : byVisitor.keySet()) {
+            if (accepted.contains(key)) {
+                total++;
+            }
+        }
+        return total;
     }
 
     public Map<String, Object> overview(OnlineStatsSettings settings, long onlineNow) {
+        return overview(settings, onlineNow, Scope.ALL);
+    }
+
+    /** Headline numbers, optionally restricted to one kind of visitor. */
+    public Map<String, Object> overview(OnlineStatsSettings settings, long onlineNow,
+                                        Scope scope) {
         List<ArticleStat> articles = stats.articles();
         List<DailyStat> days = stats.daily();
         String today = LocalDate.now(ZoneId.systemDefault()).format(DAY);
+        Set<String> accepted = acceptedKeys(scope);
 
         long views = 0;
         long visitors = 0;
@@ -41,12 +117,27 @@ public class StatisticsQueryService {
         long todayVisitors = 0;
         for (ArticleStat article : articles) {
             ArticleStat.Spec spec = article.getSpec();
-            views += nvl(spec.getViews());
-            visitors += nvl(spec.getVisitors());
+            if (!scope.filtered()) {
+                views += nvl(spec.getViews());
+                visitors += nvl(spec.getVisitors());
+                duration += nvl(spec.getTotalOnlineMs());
+                todayViews += nvl(spec.getTodayViews());
+                todayVisitors += nvl(spec.getTodayVisitors());
+            } else {
+                views += sumAccepted(spec.getVisitorViews(), accepted);
+                visitors += countAccepted(spec.getVisitorViews(), accepted);
+                duration += sumAccepted(spec.getVisitorDurations(), accepted);
+            }
             officialViews += nvl(spec.getOfficialViews());
-            duration += nvl(spec.getTotalOnlineMs());
-            todayViews += nvl(spec.getTodayViews());
-            todayVisitors += nvl(spec.getTodayVisitors());
+        }
+        if (scope.filtered()) {
+            for (DailyStat day : days) {
+                if (!today.equals(day.getSpec().getDate())) {
+                    continue;
+                }
+                todayViews += sumAccepted(day.getSpec().getVisitorViews(), accepted);
+                todayVisitors += countAccepted(day.getSpec().getVisitorViews(), accepted);
+            }
         }
         // The headline view number is Halo's own total. A configured correction is written
         // into Halo's counter data by the aggregation service, so it is not added again
@@ -54,8 +145,22 @@ public class StatisticsQueryService {
         long adjustment = settings.officialViewsAdjustmentOrDefault();
         long officialTotal = stats.officialViewsTotal();
 
-        long totalVisitors = uniqueVisitors(days);
+        long totalVisitors = 0;
+        if (!scope.filtered()) {
+            totalVisitors = uniqueVisitors(days);
+        } else {
+            Set<String> distinct = new HashSet<>();
+            for (DailyStat day : days) {
+                for (String key : day.getSpec().getVisitorViews().keySet()) {
+                    if (accepted.contains(key)) {
+                        distinct.add(key);
+                    }
+                }
+            }
+            totalVisitors = distinct.size();
+        }
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scope", scope.name().toLowerCase(java.util.Locale.ROOT));
         result.put("views", views);
         result.put("visitors", visitors);
         result.put("uniqueVisitors", totalVisitors);
@@ -79,19 +184,35 @@ public class StatisticsQueryService {
 
     /** Daily series for the trend chart, oldest first, gaps filled with zero. */
     public List<Map<String, Object>> trend(OnlineStatsSettings settings, int days) {
+        return trend(settings, days, Scope.ALL);
+    }
+
+    public List<Map<String, Object>> trend(OnlineStatsSettings settings, int days,
+                                           Scope scope) {
         LocalDate todayDate = LocalDate.now(ZoneId.systemDefault());
         LocalDate from = todayDate.minusDays(Math.max(days, 1) - 1L);
         Map<String, DailyStat> byDate = new LinkedHashMap<>();
         for (DailyStat day : stats.daily()) {
             byDate.put(day.getSpec().getDate(), day);
         }
+        Set<String> accepted = acceptedKeys(scope);
         List<Map<String, Object>> series = new ArrayList<>();
         LocalDate current = from;
         while (!current.isAfter(todayDate)) {
             String key = current.format(DAY);
             DailyStat day = byDate.get(key);
-            long views = day == null ? 0L : nvl(day.getSpec().getViews());
-            long visitors = day == null ? 0L : nvl(day.getSpec().getVisitors());
+            long views;
+            long visitors;
+            if (day == null) {
+                views = 0L;
+                visitors = 0L;
+            } else if (scope.filtered()) {
+                views = sumAccepted(day.getSpec().getVisitorViews(), accepted);
+                visitors = countAccepted(day.getSpec().getVisitorViews(), accepted);
+            } else {
+                views = nvl(day.getSpec().getViews());
+                visitors = nvl(day.getSpec().getVisitors());
+            }
             Map<String, Object> point = new LinkedHashMap<>();
             point.put("date", key);
             point.put("views", views);
@@ -103,7 +224,12 @@ public class StatisticsQueryService {
     }
 
     public List<Map<String, Object>> cumulativeTrend(OnlineStatsSettings settings, int days) {
-        List<Map<String, Object>> series = trend(settings, days);
+        return cumulativeTrend(settings, days, Scope.ALL);
+    }
+
+    public List<Map<String, Object>> cumulativeTrend(OnlineStatsSettings settings, int days,
+                                                     Scope scope) {
+        List<Map<String, Object>> series = trend(settings, days, scope);
         List<Map<String, Object>> result = new ArrayList<>();
         long running = 0;
         for (Map<String, Object> point : series) {
@@ -118,6 +244,20 @@ public class StatisticsQueryService {
     /** Browser, operating system and referrer totals across the selected window. */
     public Map<String, Object> sources(OnlineStatsSettings settings, int days,
                                        String dimension, String from, String to) {
+        return sources(settings, days, dimension, from, to, Scope.ALL);
+    }
+
+    /**
+     * Source totals for one kind of visitor. The stored maps are plain counters, so a
+     * filtered view groups the retained visitor records instead: a device keeps the
+     * same browser, system and first referrer, which makes its page views attributable.
+     */
+    public Map<String, Object> sources(OnlineStatsSettings settings, int days,
+                                       String dimension, String from, String to,
+                                       Scope scope) {
+        if (scope.filtered()) {
+            return sourcesFromRecords(settings, days, dimension, from, to, scope);
+        }
         List<DailyStat> window = window(days, from, to);
         Map<String, Long> views = new LinkedHashMap<>();
         Map<String, List<String>> visitors = new LinkedHashMap<>();
@@ -163,12 +303,115 @@ public class StatisticsQueryService {
         return result;
     }
 
-    /**
-     * Article ranking built from every published post joined with Halo's own counters,
-     * so articles the plugin never saw still appear with their official view count.
-     */
     public List<Map<String, Object>> articleList(OnlineStatsSettings settings, String sort,
                                                  int limit, String from, String to) {
+        return articleList(settings, sort, limit, from, to, Scope.ALL);
+    }
+
+    /**
+     * Source totals for one kind of visitor. The stored maps are plain counters that
+     * cannot be split after the fact, so a filtered view groups the retained visitor
+     * records instead: a device keeps the same browser, system and first referrer,
+     * which makes its page views attributable to a source.
+     */
+    private Map<String, Object> sourcesFromRecords(OnlineStatsSettings settings, int days,
+                                                   String dimension, String from, String to,
+                                                   Scope scope) {
+        boolean wantBots = scope == Scope.BOT;
+        long fromMs = windowStartMillis(days, from);
+        long toMs = windowEndMillis(to);
+        Map<String, Long> views = new LinkedHashMap<>();
+        Map<String, Long> visitors = new LinkedHashMap<>();
+        for (VisitorRecord record : records.list()) {
+            if (record.getSpec() == null || record.getMetadata() == null) {
+                continue;
+            }
+            boolean bot = Boolean.TRUE.equals(record.getSpec().getBot());
+            if (bot != wantBots) {
+                continue;
+            }
+            Long lastSeen = record.getSpec().getLastSeenAt();
+            if (lastSeen != null && (lastSeen < fromMs || lastSeen > toMs)) {
+                continue;
+            }
+            String key = switch (dimension) {
+                case "system" -> uaLabel(record.getSpec().getUserAgent(), "os");
+                case "referer" -> refererOf(record.getSpec());
+                case "country" -> record.getSpec().getCountry();
+                default -> uaLabel(record.getSpec().getUserAgent(), "browser");
+            };
+            String label = key == null || key.isBlank() ? "未知" : key;
+            if ("referer".equals(dimension) && isSelfReferer(label, settings)) {
+                continue;
+            }
+            long pageViews = record.getSpec().getPageViewCount() == null ? 0L
+                : record.getSpec().getPageViewCount();
+            views.merge(label, pageViews, Long::sum);
+            visitors.merge(label, 1L, Long::sum);
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        views.entrySet().stream()
+            .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+            .forEach(entry -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("name", entry.getKey());
+                item.put("views", entry.getValue());
+                item.put("visitors", visitors.getOrDefault(entry.getKey(), 0L));
+                items.add(item);
+            });
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dimension", dimension);
+        result.put("items", items);
+        result.put("totalViews", items.stream()
+            .mapToLong(item -> ((Number) item.get("views")).longValue()).sum());
+        return result;
+    }
+
+    private static String uaLabel(String userAgent, String key) {
+        if (userAgent == null || userAgent.isBlank()) {
+            return "未知";
+        }
+        return UaParser.parse(userAgent).getOrDefault(key, "未知");
+    }
+
+    private static String refererOf(VisitorRecord.Spec spec) {
+        if (spec.getFirstReferer() != null && !spec.getFirstReferer().isBlank()) {
+            return spec.getFirstReferer();
+        }
+        return spec.getLastReferer();
+    }
+
+    private static long windowStartMillis(int days, String from) {
+        LocalDate start;
+        if (from != null && !from.isBlank()) {
+            try {
+                start = LocalDate.parse(from, DAY);
+            } catch (Exception e) {
+                start = LocalDate.now(ZoneId.systemDefault()).minusDays(Math.max(days, 1) - 1L);
+            }
+        } else {
+            start = LocalDate.now(ZoneId.systemDefault()).minusDays(Math.max(days, 1) - 1L);
+        }
+        return start.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+    }
+
+    private static long windowEndMillis(String to) {
+        LocalDate end;
+        if (to != null && !to.isBlank()) {
+            try {
+                end = LocalDate.parse(to, DAY);
+            } catch (Exception e) {
+                end = LocalDate.now(ZoneId.systemDefault());
+            }
+        } else {
+            end = LocalDate.now(ZoneId.systemDefault());
+        }
+        return end.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1;
+    }
+
+    public List<Map<String, Object>> articleList(OnlineStatsSettings settings, String sort,
+                                                 int limit, String from, String to,
+                                                 Scope scope) {
         Map<String, Long> official = stats.officialByPost();
         Map<String, ArticleStat> tracked = new LinkedHashMap<>();
         for (ArticleStat article : stats.articles()) {
@@ -180,13 +423,14 @@ public class StatisticsQueryService {
         for (Post post : stats.posts()) {
             String name = post.getMetadata().getName();
             seen.add(name);
-            items.add(articleView(post, tracked.get(name), official.get(name), settings));
+            items.add(articleView(post, tracked.get(name), official.get(name), settings,
+                scope));
         }
         // Articles the plugin recorded but whose post is no longer published.
         for (ArticleStat article : tracked.values()) {
             String name = article.getMetadata().getName();
             if (!seen.contains(name)) {
-                items.add(articleView(null, article, official.get(name), settings));
+                items.add(articleView(null, article, official.get(name), settings, scope));
             }
         }
 
@@ -215,11 +459,40 @@ public class StatisticsQueryService {
      */
     public Map<String, Object> articleView(Post post, ArticleStat article,
                                            Long officialViews, OnlineStatsSettings settings) {
+        return articleView(post, article, officialViews, settings, Scope.ALL);
+    }
+
+    public Map<String, Object> articleView(Post post, ArticleStat article,
+                                           Long officialViews, OnlineStatsSettings settings,
+                                           Scope scope) {
         ArticleStat.Spec spec = article == null ? null : article.getSpec();
         String name = post != null ? post.getMetadata().getName()
             : article.getMetadata().getName();
         long visitors = spec == null ? 0L : nvl(spec.getVisitors());
         long duration = spec == null ? 0L : nvl(spec.getTotalOnlineMs());
+        long views = spec == null ? 0L : nvl(spec.getViews());
+        long todayViews = spec == null ? 0L : nvl(spec.getTodayViews());
+        long todayVisitors = spec == null ? 0L : nvl(spec.getTodayVisitors());
+        if (spec != null && scope.filtered()) {
+            Set<String> accepted = acceptedKeys(scope);
+            views = sumAccepted(spec.getVisitorViews(), accepted);
+            visitors = countAccepted(spec.getVisitorViews(), accepted);
+            duration = sumAccepted(spec.getVisitorDurations(), accepted);
+            // Per-article "today" counters are not kept per visitor, so a filtered row
+            // counts the devices that visited today; the headline numbers come from the
+            // daily record, which is exact.
+            long startOfDay = LocalDate.now(ZoneId.systemDefault())
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            long todayDevices = 0;
+            for (Map.Entry<String, Long> entry : spec.getVisitorLastSeen().entrySet()) {
+                if (accepted.contains(entry.getKey()) && entry.getValue() != null
+                    && entry.getValue() >= startOfDay) {
+                    todayDevices++;
+                }
+            }
+            todayViews = todayDevices;
+            todayVisitors = todayDevices;
+        }
         long official = officialViews != null ? officialViews
             : (spec == null ? 0L : nvl(spec.getOfficialViews()));
 
@@ -231,11 +504,11 @@ public class StatisticsQueryService {
             ? post.getSpec().getSlug() : spec == null ? null : spec.getSlug());
         item.put("permalink", post != null && post.getStatus() != null
             ? post.getStatus().getPermalink() : spec == null ? null : spec.getPermalink());
-        item.put("views", spec == null ? 0L : nvl(spec.getViews()));
+        item.put("views", views);
         item.put("officialViews", official);
         item.put("visitors", visitors);
-        item.put("todayViews", spec == null ? 0L : nvl(spec.getTodayViews()));
-        item.put("todayVisitors", spec == null ? 0L : nvl(spec.getTodayVisitors()));
+        item.put("todayViews", todayViews);
+        item.put("todayVisitors", todayVisitors);
         item.put("totalOnlineMs", duration);
         item.put("avgOnlineMs", visitors == 0 ? 0L : duration / visitors);
         item.put("tracked", article != null);

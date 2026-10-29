@@ -182,8 +182,10 @@ public class ChatMessageService {
                             String pageTitle) {
         long now = System.currentTimeMillis();
         long order = seq.incrementAndGet();
+        boolean fromConsole = !"visitor".equals(direction);
         ChatEntry entry = new ChatEntry(order, key, ip, direction, text, now,
-            authorName, authorAvatar, pageUrl, pageTitle, !"visitor".equals(direction));
+            authorName, authorAvatar, pageUrl, pageTitle, fromConsole, false,
+            !fromConsole);
         Deque<ChatEntry> thread =
             conversations.computeIfAbsent(key, ignored -> new ConcurrentLinkedDeque<>());
         thread.addLast(entry);
@@ -297,6 +299,41 @@ public class ChatMessageService {
             unread += conversation.unread();
         }
         return unread;
+    }
+
+    /**
+     * Console messages this device has not been shown yet. Unlike an unread counter this
+     * survives the visitor leaving the page: the message is handed over on the next
+     * visit instead of living only in a poll that never happened.
+     */
+    public int pendingForVisitor(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
+        if (thread == null) {
+            return 0;
+        }
+        int pending = 0;
+        for (ChatEntry entry : thread) {
+            if ("admin".equals(entry.direction()) && !entry.seenByVisitor()) {
+                pending++;
+            }
+        }
+        return pending;
+    }
+
+    /** Records that the visitor's page displayed the conversation. */
+    public int markSeenByVisitor(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
+        if (thread == null) {
+            return 0;
+        }
+        int marked = 0;
+        for (ChatEntry entry : thread) {
+            if ("admin".equals(entry.direction()) && entry.markSeenByVisitor()) {
+                marked++;
+                persist(entry);
+            }
+        }
+        return marked;
     }
 
     /**
@@ -459,7 +496,8 @@ public class ChatMessageService {
             spec.getText() == null ? "" : spec.getText(),
             spec.getSentAt() == null ? 0L : spec.getSentAt(),
             spec.getAuthorName(), spec.getAuthorAvatar(), spec.getPageUrl(),
-            spec.getPageTitle(), Boolean.TRUE.equals(spec.getReadByAdmin()), true);
+            spec.getPageTitle(), Boolean.TRUE.equals(spec.getReadByAdmin()), true,
+            Boolean.TRUE.equals(spec.getSeenByVisitor()));
     }
 
     private void persist(ChatEntry entry) {
@@ -504,6 +542,7 @@ public class ChatMessageService {
                 return;
             }
             existing.getSpec().setReadByAdmin(entry.readByAdmin());
+            existing.getSpec().setSeenByVisitor(entry.seenByVisitor());
             existing.getSpec().setText(entry.text());
             existing.getSpec().setAuthorName(entry.authorName());
             existing.getSpec().setAuthorAvatar(entry.authorAvatar());
@@ -521,6 +560,7 @@ public class ChatMessageService {
                     return;
                 }
                 latest.getSpec().setReadByAdmin(entry.readByAdmin());
+                latest.getSpec().setSeenByVisitor(entry.seenByVisitor());
                 latest.getSpec().setText(entry.text());
                 latest.getSpec().setAuthorName(entry.authorName());
                 latest.getSpec().setAuthorAvatar(entry.authorAvatar());
@@ -570,6 +610,7 @@ public class ChatMessageService {
         spec.setPageUrl(entry.pageUrl());
         spec.setPageTitle(entry.pageTitle());
         spec.setReadByAdmin(entry.readByAdmin());
+        spec.setSeenByVisitor(entry.seenByVisitor());
         return message;
     }
 
@@ -591,6 +632,7 @@ public class ChatMessageService {
         private final String pageTitle;
         private final String name;
         private volatile boolean readByAdmin;
+        private volatile boolean seenByVisitor;
         private volatile boolean persisted;
 
         ChatEntry(long seq, String key, String ip, String direction, String text,
@@ -603,6 +645,14 @@ public class ChatMessageService {
         ChatEntry(long seq, String key, String ip, String direction, String text,
                   long sentAt, String authorName, String authorAvatar, String pageUrl,
                   String pageTitle, boolean readByAdmin, boolean persisted) {
+            this(seq, key, ip, direction, text, sentAt, authorName, authorAvatar, pageUrl,
+                pageTitle, readByAdmin, persisted, true);
+        }
+
+        ChatEntry(long seq, String key, String ip, String direction, String text,
+                  long sentAt, String authorName, String authorAvatar, String pageUrl,
+                  String pageTitle, boolean readByAdmin, boolean persisted,
+                  boolean seenByVisitor) {
             this.seq = seq;
             this.key = key;
             this.ip = ip;
@@ -614,6 +664,7 @@ public class ChatMessageService {
             this.pageUrl = pageUrl;
             this.pageTitle = pageTitle;
             this.readByAdmin = readByAdmin;
+            this.seenByVisitor = seenByVisitor;
             this.persisted = persisted;
             this.name = "c-" + Long.toString(seq, 36) + "-" + shortHash(key);
         }
@@ -635,6 +686,18 @@ public class ChatMessageService {
             }
             readByAdmin = true;
             return true;
+        }
+
+        boolean markSeenByVisitor() {
+            if (seenByVisitor) {
+                return false;
+            }
+            seenByVisitor = true;
+            return true;
+        }
+
+        public boolean seenByVisitor() {
+            return seenByVisitor;
         }
 
         boolean isPersisted() {

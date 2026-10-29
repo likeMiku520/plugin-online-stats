@@ -164,6 +164,8 @@
   var chatSeq = 0;
   var chatSeeded = false;
   var chatWarned = false;
+  var chatSeenSeq = 0;
+
   var chatMessages = [];
 
   /* Console diagnostics only: a visitor never sees this, but the site owner looking at
@@ -457,10 +459,15 @@
     chatDom.card.style.display = 'flex';
     chatOpen = true;
     chatUnread = 0;
+    badgeTitle(0);
     renderThread();
     setNote('');
     renderLauncher();
+    if (!document.hidden) {
+      reportSeen();
+    }
     if (focusInput) {
+      askNotifyPermission();
       try {
         chatDom.input.focus({ preventScroll: true });
       } catch (e) {
@@ -683,13 +690,15 @@
   }
 
   function pollChat() {
-    if (!chatEnabled || document.hidden) {
+    if (!chatEnabled) {
       return;
     }
-    /* The first poll of a page never shows anything: it only learns where the thread
-     * stands, so a reload leaves nothing on screen until a new message arrives. The
-     * flag is cleared before the request rather than after a successful one, so a
-     * refused or failed first poll can never swallow every later message. */
+    /* The first poll of a page normally shows nothing: it only learns where the thread
+     * stands, so a reload leaves nothing on screen. Messages the site never managed to
+     * show this device are the exception — they are handed over even on that first
+     * poll, which is how an away visitor still receives what was written meanwhile.
+     * The flag is cleared before the request so a failed first poll cannot swallow
+     * every later message. */
     var seeding = !chatSeeded;
     chatSeeded = true;
     fetch(apiBase + 'chat-inbox?since=' + chatSeq, {
@@ -717,32 +726,142 @@
         return;
       }
       var list = data.messages || [];
-      var incoming = 0;
-      if (!seeding) {
-        for (var i = 0; i < list.length; i++) {
-          pushMessage(list[i]);
-          if (isNewFromAdmin(list[i])) {
-            incoming++;
-          }
-        }
-      }
       if (typeof data.latestSeq === 'number' && data.latestSeq > chatSeq) {
         chatSeq = data.latestSeq;
       }
-      if (seeding || !chatMessages.length) {
+      var pending = typeof data.pending === 'number' ? data.pending : 0;
+      if (seeding) {
+        if (pending > 0) {
+          // Nothing was ever shown to this device, so hand the conversation over.
+          for (var s = 0; s < list.length; s++) {
+            pushMessage(list[s]);
+          }
+          if (chatMessages.length) {
+            openChat(false);
+          }
+        }
+        // Otherwise the batch is history: the cursor moved, nothing is drawn.
+        return;
+      }
+      var incoming = 0;
+      for (var i = 0; i < list.length; i++) {
+        pushMessage(list[i]);
+        if (isNewFromAdmin(list[i])) {
+          incoming++;
+        }
+      }
+      if (!chatMessages.length) {
         return;
       }
       if (incoming > 0) {
         chatUnread += incoming;
+        if (document.hidden) {
+          // A background tab must not swallow the message: notify, badge the title and
+          // leave the launcher, then open the card when the visitor comes back. Opening
+          // it here would clear the badge on a page nobody is looking at.
+          notifyChat(lastAdminText());
+          badgeTitle(chatUnread);
+          renderLauncher();
+          return;
+        }
         openChat(false);
       } else if (chatOpen) {
         renderThread();
       } else {
         renderLauncher();
       }
+      if (chatOpen && !document.hidden) {
+        reportSeen();
+      }
     }).catch(function () {
       /* the next poll retries */
     });
+  }
+
+  /** Highest seq the console has written, used for the notification body. */
+  function lastAdminText() {
+    for (var i = chatMessages.length - 1; i >= 0; i--) {
+      if (chatMessages[i].direction === 'admin') {
+        return chatMessages[i].text || '';
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Tells the server the conversation has been displayed. The newest console message
+   * is remembered so a later batch is reported too, and a failed call is retried on the
+   * next poll instead of being forgotten.
+   */
+  function reportSeen() {
+    var latest = 0;
+    for (var i = 0; i < chatMessages.length; i++) {
+      if (chatMessages[i].direction === 'admin' && chatMessages[i].seq > latest) {
+        latest = chatMessages[i].seq;
+      }
+    }
+    if (latest <= chatSeenSeq) {
+      return;
+    }
+    chatSeenSeq = latest;
+    fetch(apiBase + 'chat-seen', { method: 'POST', headers: { Accept: 'application/json' } })
+      .catch(function () {
+        if (chatSeenSeq === latest) {
+          chatSeenSeq = 0;
+        }
+      });
+  }
+
+  /**
+   * Desktop notification. Browsers only allow this after the page has asked for
+   * permission, and asking is only meaningful on a gesture, so the request goes out the
+   * first time the visitor touches the widget.
+   */
+  function notifyChat(text) {
+    try {
+      if (!window.Notification || window.Notification.permission !== 'granted') {
+        return;
+      }
+      var notification = new window.Notification('管理员给你发来消息', {
+        body: text ? String(text).slice(0, 80) : '点开这条提醒查看内容',
+        tag: 'online-stats-chat'
+      });
+      notification.onclick = function () {
+        try {
+          window.focus();
+        } catch (e) {
+          /* the tab may refuse focus */
+        }
+        openChat(false);
+        notification.close();
+      };
+    } catch (e) {
+      /* notifications are best effort */
+    }
+  }
+
+  function askNotifyPermission() {
+    try {
+      if (window.Notification && window.Notification.permission === 'default') {
+        window.Notification.requestPermission();
+      }
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  /** Title badge, which works without any permission. */
+  function badgeTitle(count) {
+    var base = document.title.replace(/^（\d+）/, '');
+    if (!base && count <= 0) {
+      return;
+    }
+    document.title = count > 0 ? '（' + count + '）' + base : base;
+  }
+
+  function clearTitleBadge() {
+    chatUnread = 0;
+    badgeTitle(0);
   }
 
   heartbeat();
@@ -750,7 +869,14 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) {
       heartbeat();
+      clearTitleBadge();
       pollChat();
+      if (chatOpen) {
+        reportSeen();
+      } else if (chatMessages.length) {
+        // The visitor came back to a tab that received messages while it was hidden.
+        openChat(false);
+      }
     }
   });
   window.setInterval(heartbeat, interval * 1000);

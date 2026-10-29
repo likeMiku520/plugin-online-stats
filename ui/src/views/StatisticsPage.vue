@@ -57,6 +57,8 @@ const systems = ref<SourceItem[]>([])
 const referers = ref<SourceItem[]>([])
 const trendDays = ref(90)
 const articleSort = ref<'views' | 'visitors' | 'today' | 'duration'>('views')
+/** Which visitors every figure on the page is counted over. */
+const scope = ref<'all' | 'human' | 'bot'>('all')
 const loading = ref(true)
 
 const drill = ref<{
@@ -117,14 +119,25 @@ async function lookupGeo(ip: string | null | undefined) {
 
 async function loadAll() {
   loading.value = true
+  // Every figure on this page follows the selector at the top right, so the filter is
+  // sent with each request instead of being applied to already loaded numbers.
+  const filter = { type: scope.value }
   try {
     const [ov, tr, ar, br, sy, rf] = await Promise.all([
-      axios.get(`${api}/statistics/overview`),
-      axios.get(`${api}/statistics/trend`, { params: { days: trendDays.value } }),
-      axios.get(`${api}/statistics/articles`, { params: { sort: articleSort.value, limit: 50 } }),
-      axios.get(`${api}/statistics/sources`, { params: { dimension: 'browser', days: 30 } }),
-      axios.get(`${api}/statistics/sources`, { params: { dimension: 'system', days: 30 } }),
-      axios.get(`${api}/statistics/sources`, { params: { dimension: 'referer', days: 30 } }),
+      axios.get(`${api}/statistics/overview`, { params: filter }),
+      axios.get(`${api}/statistics/trend`, { params: { ...filter, days: trendDays.value } }),
+      axios.get(`${api}/statistics/articles`, {
+        params: { ...filter, sort: articleSort.value, limit: 50 },
+      }),
+      axios.get(`${api}/statistics/sources`, {
+        params: { ...filter, dimension: 'browser', days: 30 },
+      }),
+      axios.get(`${api}/statistics/sources`, {
+        params: { ...filter, dimension: 'system', days: 30 },
+      }),
+      axios.get(`${api}/statistics/sources`, {
+        params: { ...filter, dimension: 'referer', days: 30 },
+      }),
     ])
     overview.value = ov.data
     series.value = tr.data.series || []
@@ -277,16 +290,27 @@ function barWidth(views: number): string {
 
 async function setTrendDays(days: number) {
   trendDays.value = days
-  const { data } = await axios.get(`${api}/statistics/trend`, { params: { days } })
+  const { data } = await axios.get(`${api}/statistics/trend`, {
+    params: { days, type: scope.value },
+  })
   series.value = data.series || []
 }
 
 async function setArticleSort(sort: 'views' | 'visitors' | 'today' | 'duration') {
   articleSort.value = sort
   const { data } = await axios.get(`${api}/statistics/articles`, {
-    params: { sort, limit: 50 },
+    params: { sort, limit: 50, type: scope.value },
   })
   articles.value = data.items || []
+}
+
+/** Switching reloads everything: the filter applies to every figure on the page. */
+function setScope(next: 'all' | 'human' | 'bot') {
+  if (scope.value === next) {
+    return
+  }
+  scope.value = next
+  loadAll()
 }
 
 onMounted(() => {
@@ -308,7 +332,24 @@ onUnmounted(() => {
         <h2>访问统计</h2>
         <p>数据来自插件自己的访问记录，浏览量同时对照 Halo 官方计数。统计只记录文章详情页。</p>
       </div>
-      <button class="os-btn os-btn--ghost" type="button" @click="loadAll">刷新</button>
+      <div class="os-stat-page__actions">
+        <div class="os-scope">
+          <button
+            v-for="option in [
+              { value: 'all', label: '全部' },
+              { value: 'human', label: '真人' },
+              { value: 'bot', label: '机器人' },
+            ]"
+            :key="option.value"
+            type="button"
+            :class="{ 'is-active': scope === option.value }"
+            @click="setScope(option.value as 'all' | 'human' | 'bot')"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <button class="os-btn os-btn--ghost" type="button" @click="loadAll">刷新</button>
+      </div>
     </header>
 
     <div v-if="emptyHint" class="os-notice">{{ emptyHint }}</div>
@@ -535,6 +576,7 @@ onUnmounted(() => {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
+    gap: 1rem;
     margin-bottom: 1rem;
 
     h2 {
@@ -548,6 +590,39 @@ onUnmounted(() => {
       margin: 0.25rem 0 0;
       font-size: 0.8125rem;
       color: #6b7280;
+    }
+  }
+
+  &__actions {
+    display: flex;
+    flex: none;
+    gap: 0.5rem;
+    align-items: center;
+  }
+}
+
+.os-scope {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+
+  button {
+    padding: 0.25rem 0.625rem;
+    font-size: 0.75rem;
+    color: #4b5563;
+    cursor: pointer;
+    background: #fff;
+    border: 0;
+    border-left: 1px solid #e5e7eb;
+
+    &:first-child {
+      border-left: 0;
+    }
+
+    &.is-active {
+      color: #fff;
+      background: #39C5BB;
     }
   }
 }

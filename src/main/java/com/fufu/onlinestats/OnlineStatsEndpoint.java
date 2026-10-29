@@ -112,6 +112,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/statistics/visitors/{visitorKey}", this::getVisitorDetail)
             .GET("/chat-inbox", this::getChatInbox)
             .POST("/chat-reply", this::postChatReply)
+            .POST("/chat-seen", this::postChatSeen)
             .GET("/chat-conversations", this::getChatConversations)
             .GET("/chat-messages", this::getChatMessages)
             .POST("/chat-send", this::postChatSend)
@@ -602,18 +603,20 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return fetchSettings().flatMap(settings -> {
             // Applies a changed correction right away instead of waiting for the timer.
             statsService.ensureAdjustment(settings.officialViewsAdjustmentOrDefault());
-            return ServerResponse.ok().bodyValue(
-                queryService.overview(settings, registry.count(settings.onlineTimeoutMillis())));
+            return ServerResponse.ok().bodyValue(queryService.overview(settings,
+                registry.count(settings.onlineTimeoutMillis()), scopeOf(request)));
         });
     }
 
     private Mono<ServerResponse> getTrend(ServerRequest request) {
         return fetchSettings().flatMap(settings -> {
             int days = positiveInt(request.queryParam("days").orElse(null), 30);
+            StatisticsQueryService.Scope scope = scopeOf(request);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("days", days);
-            payload.put("series", queryService.cumulativeTrend(settings, days));
-            payload.put("daily", queryService.trend(settings, days));
+            payload.put("scope", scope.name().toLowerCase(Locale.ROOT));
+            payload.put("series", queryService.cumulativeTrend(settings, days, scope));
+            payload.put("daily", queryService.trend(settings, days, scope));
             return ServerResponse.ok().bodyValue(payload);
         });
     }
@@ -622,11 +625,19 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return fetchSettings().flatMap(settings -> {
             String sort = request.queryParam("sort").orElse("views");
             int limit = positiveInt(request.queryParam("limit").orElse(null), 50);
+            StatisticsQueryService.Scope scope = scopeOf(request);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("sort", sort);
-            payload.put("items", queryService.articleList(settings, sort, limit, null, null));
+            payload.put("scope", scope.name().toLowerCase(Locale.ROOT));
+            payload.put("items",
+                queryService.articleList(settings, sort, limit, null, null, scope));
             return ServerResponse.ok().bodyValue(payload);
         });
+    }
+
+    /** Human, bot or everything, from the {@code type} query parameter. */
+    private static StatisticsQueryService.Scope scopeOf(ServerRequest request) {
+        return StatisticsQueryService.Scope.of(request.queryParam("type").orElse(null));
     }
 
     private Mono<ServerResponse> getArticleDetail(ServerRequest request) {
@@ -647,7 +658,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             String from = request.queryParam("from").orElse(null);
             String to = request.queryParam("to").orElse(null);
             return ServerResponse.ok()
-                .bodyValue(queryService.sources(settings, days, dimension, from, to));
+                .bodyValue(queryService.sources(settings, days, dimension, from, to,
+                    scopeOf(request)));
         });
     }
 
@@ -699,6 +711,10 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             payload.put("messages", chatService.poll(key, since, CHAT_POLL_LIMIT).stream()
                 .map(OnlineStatsEndpoint::toChatView).toList());
             payload.put("latestSeq", chatService.latestSeq(key));
+            // Messages the site has never shown this device. A page that loads after the
+            // visitor has been away uses this to hand the conversation over instead of
+            // treating it as history.
+            payload.put("pending", chatService.pendingForVisitor(key));
             return ServerResponse.ok().bodyValue(payload);
         });
     }
@@ -741,6 +757,19 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                         return ServerResponse.ok().bodyValue(payload);
                     });
             }));
+    }
+
+    /** The visitor's page reports that it displayed the conversation. */
+    private Mono<ServerResponse> postChatSeen(ServerRequest request) {
+        String ip = resolveClientIp(request);
+        if (isChatRateLimited(ip)) {
+            return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
+        int marked = chatService.markSeenByVisitor(deviceKeyOf(request, ip));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ok", true);
+        payload.put("marked", marked);
+        return ServerResponse.ok().bodyValue(payload);
     }
 
     private Mono<ServerResponse> getChatConversations(ServerRequest request) {

@@ -57,5 +57,12 @@ public class ChatMessage extends AbstractExtension {
         private String pageTitle;
 
         private Boolean readByAdmin;
+
+        /**
+         * Whether the visitor's page has actually shown this message. A console message
+         * written while nobody was on the site stays false, so the next visit can hand
+         * it over instead of losing it.
+         */
+        private Boolean seenByVisitor;
     }
 }
