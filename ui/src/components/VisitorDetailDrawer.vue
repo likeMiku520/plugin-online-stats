@@ -66,14 +66,11 @@ const peerInitial = computed(() => (peerName.value ? peerName.value.slice(0, 1) 
 const pageVisits = computed(() => detail.value.pageVisits || [])
 
 /**
- * Read state as the reader cares about it: their own messages say whether the other
- * side has seen them, incoming messages say whether they have been read here.
+ * Read state of the messages written from here: unread stays red until the visitor
+ * opens the conversation, then it turns grey.
  */
-function readState(message: ChatMessage): string {
-  if (message.direction === 'admin') {
-    return message.seenByVisitor ? '访客已读' : '访客未读'
-  }
-  return message.readByAdmin ? '已读' : '未读'
+function readStateLabel(message: ChatMessage): string {
+  return message.seenByVisitor ? '已读' : '未读'
 }
 const visitsOpen = ref(false)
 const enteredAtOfCurrentPage = computed(() => {
@@ -386,12 +383,10 @@ onUnmounted(() => {
                       · 在「{{ message.pageTitle }}」
                     </span>
                     <span
-                      :class="[
-                        'os-chat__read',
-                        readState(message) === '已读' ? 'is-read' : 'is-unread',
-                      ]"
+                      v-if="message.direction === 'admin'"
+                      :class="['os-chat__read', message.seenByVisitor ? 'is-read' : 'is-unread']"
                     >
-                      · {{ readState(message) }}
+                      · {{ readStateLabel(message) }}
                     </span>
                   </div>
                 </div>
@@ -562,12 +557,6 @@ onUnmounted(() => {
             <dd>{{ detail.language || '—' }}</dd>
             <dt>时区</dt>
             <dd>{{ detail.timezone || '—' }}</dd>
-            <dt>CPU 核心</dt>
-            <dd>{{ detail.cpuCores || '—' }}</dd>
-            <dt>设备内存</dt>
-            <dd>{{ detail.deviceMemory || '—' }}</dd>
-            <dt>网络类型</dt>
-            <dd>{{ detail.connection || '—' }}</dd>
           </dl>
         </section>
 
@@ -998,8 +987,9 @@ onUnmounted(() => {
   &__read {
     margin-left: 0.125rem;
 
+    /* Grey once the visitor has opened it, red while it is still waiting. */
     &.is-read {
-      color: #10b981;
+      color: #9ca3af;
     }
 
     &.is-unread {
@@ -1116,7 +1106,14 @@ onUnmounted(() => {
     display: flex;
     gap: 0.5rem;
     align-items: center;
-    justify-content: space-between;
+    /* The hint takes the free space, so the two buttons stay next to each other on the
+     * right instead of being pushed to opposite ends of the row. */
+    justify-content: flex-end;
+  }
+
+  &__hint,
+  &__error {
+    margin-right: auto;
   }
 
   &__hint {

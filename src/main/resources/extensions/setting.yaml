@@ -58,7 +58,7 @@ spec:
           name: geoEndpoint
           label: IP 属地查询接口
           help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在点击「查询属地」时才请求。
-          value: "https://api.mir6.com/api/ip?ip=%s&type=json"
+          value: "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true"
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数

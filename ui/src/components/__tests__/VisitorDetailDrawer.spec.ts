@@ -352,7 +352,7 @@ describe('the console conversation panel', () => {
     expect(sections).toContain('当前在做什么')
   })
 
-  it('marks whether the visitor has read each console message', async () => {
+  it('marks only the messages sent from here, unread until the visitor opens them', async () => {
     mocked.get.mockImplementation((url: string) => {
       if (url.includes('/chat-messages')) {
         return Promise.resolve({
@@ -375,10 +375,28 @@ describe('the console conversation panel', () => {
     const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
     await flushPromises()
 
-    const states = wrapper.findAll('.os-chat__read').map((node) => node.text())
-    expect(states[0]).toContain('访客已读')
-    expect(states[1]).toContain('访客未读')
-    expect(states[2]).toContain('已读')
+    const states = wrapper.findAll('.os-chat__read')
+    expect(states.length).toBe(2)
+    expect(states[0].text()).toContain('已读')
+    expect(states[0].classes()).toContain('is-read')
+    expect(states[1].text()).toContain('未读')
+    expect(states[1].classes()).toContain('is-unread')
+    // The visitor's own replies carry no marker here.
+    expect(wrapper.find('.os-chat__list').text()).toContain('在的')
+    expect(wrapper.findAll('.os-chat__read').length).toBe(2)
+  })
+
+  it('no longer shows fields browsers cap or withhold', async () => {
+    const wrapper = mount(VisitorDetailDrawer, { props: { record: record() } })
+    await flushPromises()
+
+    const labels = wrapper.findAll('.os-kv dt').map((node) => node.text())
+    expect(labels).not.toContain('CPU 核心')
+    expect(labels).not.toContain('设备内存')
+    expect(labels).not.toContain('网络类型')
+    // The ones that are accurate stay.
+    expect(labels).toContain('时区')
+    expect(labels).toContain('屏幕分辨率')
   })
 
   it('scrolls back to the end after sending', async () => {

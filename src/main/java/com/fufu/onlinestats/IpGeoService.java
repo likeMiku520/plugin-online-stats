@@ -6,7 +6,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -26,7 +33,19 @@ public class IpGeoService {
 
     private static final Logger log = LoggerFactory.getLogger(IpGeoService.class);
 
-    public static final String DEFAULT_ENDPOINT = "https://api.mir6.com/api/ip?ip=%s&type=json";
+    /**
+     * An address that answers with data, in Chinese, over HTTPS and without a key. It
+     * returns GBK, which {@link #decode(byte[])} handles.
+     */
+    public static final String DEFAULT_ENDPOINT =
+        "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true";
+
+    /**
+     * Addresses shipped by earlier versions that no longer answer with data. The one
+     * behind {@code api.mir6.com} now returns a PHP warning page, so a stored value
+     * pointing there is ignored instead of showing that error to the console.
+     */
+    private static final List<String> RETIRED_HOSTS = List.of("api.mir6.com", "ip-api.com");
 
     private static final long TTL_MS = 7L * 24 * 60 * 60 * 1000;
     private static final int MAX_CACHE = 2000;
@@ -42,9 +61,31 @@ public class IpGeoService {
     private volatile String endpoint = DEFAULT_ENDPOINT;
 
     public void configure(String endpoint) {
-        if (endpoint != null && !endpoint.isBlank() && endpoint.contains("%s")) {
-            this.endpoint = endpoint;
+        if (endpoint == null || endpoint.isBlank() || !endpoint.contains("%s")) {
+            this.endpoint = DEFAULT_ENDPOINT;
+            return;
         }
+        if (isRetired(endpoint)) {
+            log.info("IP location endpoint {} no longer returns data, using {}",
+                endpoint, DEFAULT_ENDPOINT);
+            this.endpoint = DEFAULT_ENDPOINT;
+            return;
+        }
+        this.endpoint = endpoint;
+    }
+
+    /** Whether an address belongs to one of the retired providers. */
+    public static boolean isRetired(String endpoint) {
+        if (endpoint == null) {
+            return false;
+        }
+        String lower = endpoint.toLowerCase(Locale.ROOT);
+        for (String host : RETIRED_HOSTS) {
+            if (lower.contains(host)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public String endpoint() {
@@ -89,10 +130,10 @@ public class IpGeoService {
         } catch (Exception e) {
             return Mono.just(IpLocation.failed(ip, "接口地址无效：" + endpoint));
         }
-        CompletableFuture<HttpResponse<String>> future =
-            http.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        CompletableFuture<HttpResponse<byte[]>> future =
+            http.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
         return Mono.fromFuture(future)
-            .map(response -> parse(ip, response))
+            .map(response -> parse(ip, response.statusCode(), decode(response.body())))
             .timeout(Duration.ofSeconds(15))
             .onErrorResume(error -> {
                 log.debug("IP location lookup for {} failed: {}", ip, error.toString());
@@ -108,19 +149,52 @@ public class IpGeoService {
             });
     }
 
-    private IpLocation parse(String ip, HttpResponse<String> response) {
-        if (response.statusCode() != 200) {
-            return IpLocation.failed(ip, "接口返回 HTTP " + response.statusCode());
+    /**
+     * Decodes a response body. Chinese providers answer in GBK while most others use
+     * UTF-8, so the bytes are tried as UTF-8 first and only re-read as GB18030 when that
+     * is not valid — no per-provider table to keep up to date.
+     */
+    static String decode(byte[] body) {
+        if (body == null || body.length == 0) {
+            return "";
         }
-        String body = response.body();
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(body))
+                .toString();
+        } catch (CharacterCodingException e) {
+            try {
+                return Charset.forName("GB18030").decode(ByteBuffer.wrap(body)).toString();
+            } catch (Exception ignored) {
+                return new String(body, StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    IpLocation parse(String ip, int status, String body) {
+        if (status != 200) {
+            return IpLocation.failed(ip, "接口返回 HTTP " + status);
+        }
         if (body == null || body.isBlank()) {
             return IpLocation.failed(ip, "接口返回空响应");
         }
+        String payload = body.trim();
+        if (payload.startsWith("<")) {
+            // A page instead of data, which is how a provider with a broken backend
+            // answers. Say that clearly instead of complaining about JSON.
+            return IpLocation.failed(ip,
+                "接口返回了网页而不是数据，接口地址可能已经失效：" + stripTags(payload));
+        }
         try {
-            JsonNode root = mapper.readTree(body);
+            JsonNode root = mapper.readTree(payload);
             JsonNode data = root.path("data");
             if (!data.isMissingNode() && root.path("code").asInt(0) == 200) {
                 return fromMir6(ip, data);
+            }
+            if (root.has("pro") || root.has("addr")) {
+                return fromPconline(ip, root);
             }
             if (root.has("query") || root.has("status")) {
                 return fromIpApi(ip, root);
@@ -129,8 +203,64 @@ public class IpGeoService {
             return IpLocation.failed(ip, "接口返回了无法识别的数据"
                 + (message.isBlank() ? "" : "：" + message));
         } catch (Exception e) {
-            return IpLocation.failed(ip, "响应不是合法 JSON：" + shortText(body));
+            return IpLocation.failed(ip, "响应不是合法 JSON：" + stripTags(payload));
         }
+    }
+
+    /**
+     * Mapping for the pconline shape: {@code pro}, {@code city} and a ready made
+     * {@code addr} such as {@code 山东省枣庄市 移动}.
+     */
+    private IpLocation fromPconline(String ip, JsonNode root) {
+        String province = text(root, "pro", null);
+        String city = text(root, "city", null);
+        String addr = text(root, "addr", null);
+        if (province == null && city == null && addr == null) {
+            String error = text(root, "err", null);
+            return IpLocation.failed(ip,
+                error == null || error.isBlank() ? "接口没有查到该地址的属地" : error);
+        }
+        String country = text(root, "country", null);
+        if (country == null && province != null) {
+            country = "中国";
+        }
+        String location = addr;
+        if (location == null) {
+            location = city == null || city.equals(province) ? province
+                : province == null ? city : province + " " + city;
+        }
+        return new IpLocation(ip, null, country, text(root, "countryCode", null),
+            province, city, null, networkOf(addr, province, city), null, null,
+            null, null, ip != null && ip.contains(":") ? "IPv6" : "IPv4",
+            location, System.currentTimeMillis(), null);
+    }
+
+    /**
+     * The carrier is what remains of the address once the place names are taken out:
+     * {@code 山东省枣庄市 移动} leaves {@code 移动}.
+     */
+    private static String networkOf(String addr, String province, String city) {
+        if (addr == null) {
+            return null;
+        }
+        String rest = addr;
+        if (province != null && !province.isBlank()) {
+            rest = rest.replace(province, "");
+        }
+        if (city != null && !city.isBlank()) {
+            rest = rest.replace(city, "");
+        }
+        rest = rest.trim();
+        return rest.isEmpty() ? null : (rest.length() > MAX_FIELD
+            ? rest.substring(0, MAX_FIELD) : rest);
+    }
+
+    /** Strips markup so an HTML error page reads as one line of text. */
+    private static String stripTags(String value) {
+        if (value == null) {
+            return "";
+        }
+        return shortText(value.replaceAll("<[^>]*>", " "));
     }
 
     private IpLocation fromMir6(String ip, JsonNode data) {

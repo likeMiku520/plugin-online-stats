@@ -103,9 +103,10 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
         if (geoEndpoint == null || geoEndpoint.isBlank() || !geoEndpoint.contains("%s")) {
             return IpGeoService.DEFAULT_ENDPOINT;
         }
-        // The default shipped by 1.1.x pointed at ip-api; 1.2 switched to mir6.
-        // Ignore the stale value so an upgrade needs no manual settings change.
-        if (geoEndpoint.contains("ip-api.com")) {
+        // Earlier versions shipped ip-api and then mir6; both stopped answering with
+        // data, so a stored value pointing at them is ignored and the current default
+        // is used instead. A hand written address is never touched.
+        if (IpGeoService.isRetired(geoEndpoint)) {
             return IpGeoService.DEFAULT_ENDPOINT;
         }
         return geoEndpoint;

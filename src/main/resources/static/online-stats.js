@@ -72,28 +72,8 @@
     }
   }
 
-  /* Chromium exposes a coarse hint (effectiveType, downlink, rtt); other engines do
-   * not, so say so instead of leaving the field empty. */
-  function connectionInfo() {
-    var c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    if (!c) {
-      return navigator.onLine === false ? '离线' : '浏览器未提供';
-    }
-    var parts = [c.effectiveType, c.downlink ? c.downlink + 'Mbps' : '',
-      c.rtt ? c.rtt + 'ms' : '', c.saveData ? '省流量' : ''].filter(Boolean);
-    return parts.length ? parts.join(' / ') : '已连接';
-  }
-
-  /* Browsers cap deviceMemory at 8 GB on purpose, so say it rather than let the number
-   * look like the machine's real memory. */
-  function memoryInfo() {
-    var value = navigator.deviceMemory;
-    if (!value) {
-      return '';
-    }
-    return value >= 8 ? value + 'GB（浏览器上限）' : value + 'GB';
-  }
-
+  /* Device memory, CPU count and network type are deliberately not collected: every
+   browser caps or withholds them, so the values were misleading more often than not. */
   function screenInfo() {
     var dpr = window.devicePixelRatio;
     var base = screen.width + 'x' + screen.height;
@@ -117,10 +97,7 @@
       viewport: window.innerWidth + 'x' + window.innerHeight,
       timezone: timezone(),
       language: languages(),
-      platform: text(navigator.platform),
-      cores: text(navigator.hardwareConcurrency),
-      memory: memoryInfo(),
-      connection: connectionInfo()
+      platform: text(navigator.platform)
     };
   }
 
@@ -287,9 +264,6 @@
       '.oschat-break{flex:none;padding:.5rem .75rem;font-family:inherit;font-size:.8125rem;',
       'color:#4b5563;cursor:pointer;background:#fff;border:1px solid #e5e7eb;border-radius:.5rem}',
       '.oschat-break:hover{background:#f8fafc}',
-      '.oschat-state{margin-top:.125rem;font-size:.625rem}',
-      '.oschat-state.is-read{color:#10b981}',
-      '.oschat-state.is-unread{color:#dc2626}',
       '.oschat-note{display:none;padding:0 1rem .625rem;font-size:.6875rem;color:#dc2626}',
       /* Same shape as the theme's own floating buttons, but on a solid card surface
        * rather than a translucent one: the solid colour is legible over any banner.
@@ -447,14 +421,6 @@
       var bubble = chatElement('div', 'oschat-bubble');
       bubble.appendChild(chatElement('p', 'oschat-text', message.text));
       box.appendChild(bubble);
-      /* The visitor's own messages carry whether the console has read them; an
-       * administrator's message is read by definition once it is on screen. */
-      if (mine) {
-        var state = chatElement('div',
-          message.readByAdmin ? 'oschat-state is-read' : 'oschat-state is-unread',
-          message.readByAdmin ? '管理员已读' : '管理员未读');
-        box.appendChild(state);
-      }
       row.appendChild(box);
       chatDom.thread.appendChild(row);
     }
