@@ -57,19 +57,41 @@ class IpGeoServiceTest {
     }
 
     @Test
-    void aRetiredEndpointIsIgnored() {
-        assertTrue(IpGeoService.isRetired("https://api.mir6.com/api/ip?ip=%s&type=json"));
-        assertTrue(IpGeoService.isRetired("http://ip-api.com/json/%s"));
-        assertFalse(IpGeoService.isRetired(
-            "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true"));
+    void theRetiredPathOfAWorkingProviderIsRewritten() {
+        IpLocation location = service.parse(IP, 200,
+            "{\"code\":200,\"msg\":\"success\",\"data\":{\"ip\":\"" + IP + "\","
+                + "\"dec\":\"3748166269\",\"country\":\"中国\",\"countryCode\":\"CN\","
+                + "\"province\":\"湖北省\",\"city\":\"武汉市\",\"districts\":\"\","
+                + "\"idc\":\"\",\"isp\":\"中国移动\",\"net\":\"无线基站网络\","
+                + "\"zipcode\":\"430000\",\"areacode\":\"027\",\"protocol\":\"IPv4\","
+                + "\"location\":\"中国[CN] 湖北省 武汉市\"}}");
 
-        service.configure("https://api.mir6.com/api/ip?ip=%s&type=json");
-        assertEquals(IpGeoService.DEFAULT_ENDPOINT, service.endpoint(),
-            "the console must not keep hitting a dead address");
+        assertTrue(location.resolved());
+        assertEquals("湖北省", location.province());
+        assertEquals("武汉市", location.city());
+        assertEquals("中国移动", location.isp());
+        assertEquals("无线基站网络", location.net());
+        assertEquals("027", location.areacode());
+
+        // The address the plugin used to ship no longer answers; the stored value is
+        // rewritten to the path that still works instead of being dropped.
+        assertEquals(IpGeoService.MIR6_ENDPOINT,
+            IpGeoService.normalize("https://api.mir6.com/api/ip?ip=%s&type=json"));
+        assertEquals(IpGeoService.MIR6_ENDPOINT,
+            IpGeoService.normalize("https://api.mir6.com/api/ip_json?ip=%s"),
+            "the working path is left alone");
     }
 
     @Test
-    void aHandWrittenEndpointIsKept() {
+    void aRetiredEndpointIsReplacedButAHandWrittenOneIsKept() {
+        assertTrue(IpGeoService.isRetired("http://ip-api.com/json/%s"));
+        assertFalse(IpGeoService.isRetired("https://api.mir6.com/api/ip_json?ip=%s"));
+        assertFalse(IpGeoService.isRetired(
+            "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true"));
+
+        service.configure("http://ip-api.com/json/%s");
+        assertEquals(IpGeoService.DEFAULT_ENDPOINT, service.endpoint());
+
         service.configure("https://example.com/geo?ip=%s");
         assertEquals("https://example.com/geo?ip=%s", service.endpoint());
     }

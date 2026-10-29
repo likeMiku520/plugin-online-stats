@@ -34,18 +34,29 @@ public class IpGeoService {
     private static final Logger log = LoggerFactory.getLogger(IpGeoService.class);
 
     /**
-     * An address that answers with data, in Chinese, over HTTPS and without a key. It
-     * returns GBK, which {@link #decode(byte[])} handles.
+     * Chinese location data over HTTPS without a key. Only the {@code ip_json} path
+     * answers with data; the {@code ip?type=json} path this plugin used to ship now
+     * returns a PHP warning page.
      */
-    public static final String DEFAULT_ENDPOINT =
-        "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true";
+    public static final String MIR6_ENDPOINT = "https://api.mir6.com/api/ip_json?ip=%s";
 
     /**
-     * Addresses shipped by earlier versions that no longer answer with data. The one
-     * behind {@code api.mir6.com} now returns a PHP warning page, so a stored value
-     * pointing there is ignored instead of showing that error to the console.
+     * Secondary address used when the first one stops answering with data. It answers
+     * in GBK, which {@link #decode(byte[])} handles.
      */
-    private static final List<String> RETIRED_HOSTS = List.of("api.mir6.com", "ip-api.com");
+    public static final String PCONLINE_ENDPOINT =
+        "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true";
+
+    public static final String DEFAULT_ENDPOINT = MIR6_ENDPOINT;
+
+    /** Providers shipped by earlier versions that no longer answer with data at all. */
+    private static final List<String> RETIRED_HOSTS = List.of("ip-api.com");
+
+    /**
+     * The retired path of a provider that still works: {@code api/ip?type=json} is
+     * rewritten to the working one so a stored setting heals itself.
+     */
+    private static final String BROKEN_MIR6_PATH = "mir6.com/api/ip?";
 
     private static final long TTL_MS = 7L * 24 * 60 * 60 * 1000;
     private static final int MAX_CACHE = 2000;
@@ -61,17 +72,27 @@ public class IpGeoService {
     private volatile String endpoint = DEFAULT_ENDPOINT;
 
     public void configure(String endpoint) {
+        this.endpoint = normalize(endpoint);
+    }
+
+    /**
+     * Turns a stored setting into an address that actually answers: an empty or broken
+     * value falls back to the default, a retired provider is replaced, and the retired
+     * path of a working provider is rewritten. A hand written address is kept as is.
+     */
+    public static String normalize(String endpoint) {
         if (endpoint == null || endpoint.isBlank() || !endpoint.contains("%s")) {
-            this.endpoint = DEFAULT_ENDPOINT;
-            return;
+            return DEFAULT_ENDPOINT;
         }
         if (isRetired(endpoint)) {
             log.info("IP location endpoint {} no longer returns data, using {}",
                 endpoint, DEFAULT_ENDPOINT);
-            this.endpoint = DEFAULT_ENDPOINT;
-            return;
+            return DEFAULT_ENDPOINT;
         }
-        this.endpoint = endpoint;
+        if (endpoint.toLowerCase(Locale.ROOT).contains(BROKEN_MIR6_PATH)) {
+            return MIR6_ENDPOINT;
+        }
+        return endpoint;
     }
 
     /** Whether an address belongs to one of the retired providers. */
@@ -86,6 +107,15 @@ public class IpGeoService {
             }
         }
         return false;
+    }
+
+    /** Whether the address is one this plugin ships, so trying another is acceptable. */
+    private static boolean isShipped(String endpoint) {
+        if (endpoint == null) {
+            return false;
+        }
+        String lower = endpoint.toLowerCase(Locale.ROOT);
+        return lower.contains("api.mir6.com") || lower.contains("pconline.com.cn");
     }
 
     public String endpoint() {
@@ -120,15 +150,46 @@ public class IpGeoService {
             cache.put(ip, local);
             return Mono.just(local);
         }
+        return attempt(ip, endpoint)
+            .flatMap(location -> {
+                if (location.resolved() || !isShipped(endpoint)) {
+                    // A hand written address is never replaced: sending the visitor's IP
+                    // to a service the owner did not choose would be a surprise.
+                    return Mono.just(location);
+                }
+                String other = otherShipped(endpoint);
+                log.debug("IP location lookup for {} got no data from {}, trying {}",
+                    ip, endpoint, other);
+                return attempt(ip, other)
+                    .map(second -> second.resolved() ? second : location);
+            })
+            .doOnNext(location -> {
+                if (location.resolved()) {
+                    if (cache.size() >= MAX_CACHE) {
+                        cache.clear();
+                    }
+                    cache.put(ip, location);
+                }
+            });
+    }
+
+    /** The shipped address that is not the one currently configured. */
+    private static String otherShipped(String current) {
+        String lower = current == null ? "" : current.toLowerCase(Locale.ROOT);
+        return lower.contains("api.mir6.com") ? PCONLINE_ENDPOINT : MIR6_ENDPOINT;
+    }
+
+    /** One HTTP call against one address template. */
+    private Mono<IpLocation> attempt(String ip, String template) {
         HttpRequest request;
         try {
-            request = HttpRequest.newBuilder(URI.create(String.format(endpoint, ip)))
+            request = HttpRequest.newBuilder(URI.create(String.format(template, ip)))
                 .timeout(Duration.ofSeconds(10))
                 .header("User-Agent", "Mozilla/5.0 (compatible; halo-online-stats/1.2)")
                 .GET()
                 .build();
         } catch (Exception e) {
-            return Mono.just(IpLocation.failed(ip, "接口地址无效：" + endpoint));
+            return Mono.just(IpLocation.failed(ip, "接口地址无效：" + template));
         }
         CompletableFuture<HttpResponse<byte[]>> future =
             http.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
@@ -138,14 +199,6 @@ public class IpGeoService {
             .onErrorResume(error -> {
                 log.debug("IP location lookup for {} failed: {}", ip, error.toString());
                 return Mono.just(IpLocation.failed(ip, "请求接口失败：" + shortText(error.toString())));
-            })
-            .doOnNext(location -> {
-                if (location.resolved()) {
-                    if (cache.size() >= MAX_CACHE) {
-                        cache.clear();
-                    }
-                    cache.put(ip, location);
-                }
             });
     }
 

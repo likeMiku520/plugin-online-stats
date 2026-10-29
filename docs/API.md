@@ -389,7 +389,7 @@ window.__ONLINE_STATS__ = {
   "ip": "1.2.3.4",
   "resolved": true,
   "error": null,
-  "endpoint": "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true",
+  "endpoint": "https://api.mir6.com/api/ip_json?ip=%s",
   "dec": "16909060",
   "country": "中国",
   "countryCode": "CN",
