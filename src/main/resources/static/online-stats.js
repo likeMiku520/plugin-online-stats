@@ -167,6 +167,9 @@
   var chatSeeded = false;
   var chatWarned = false;
   var chatSeenSeq = 0;
+  var pageScrollLocked = false;
+  var savedBodyOverflow = '';
+  var savedHtmlOverflow = '';
 
   var chatMessages = [];
 
@@ -281,6 +284,19 @@
       'max-height:60vh;animation:oschat-up .28s ease-out}}',
       '@media (max-width:768px){.oschat-card{top:0;left:0;right:0;height:33.333vh;',
       'max-height:33.333vh;border-radius:0 0 .75rem .75rem;animation:oschat-down .28s ease-out}}',
+      /* Full height, driven by the drag handle. The transition runs on the class change
+       * only; while a finger is dragging, the script switches it off. */
+      '.oschat-card.is-full{height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;',
+      'border-radius:0}',
+      '@media (max-width:768px){.oschat-card{transition:height .22s ease, border-radius .22s ease}}',
+      '.oschat-grip{display:none}',
+      '@media (max-width:768px){.oschat-grip{display:flex;flex:none;align-items:center;',
+      'justify-content:center;height:1.5rem;cursor:grab;touch-action:none;',
+      'background:transparent}',
+      '.oschat-card.is-full .oschat-grip{cursor:grab}',
+      '.oschat-grip__bar{width:2.75rem;height:.3125rem;background:#cbd5e1;',
+      'border-radius:9999px}',
+      ':root.dark .oschat-grip__bar{background:rgba(255,255,255,.28)}}',
       '@keyframes oschat-up{from{opacity:0;transform:translateY(1rem)}to{opacity:1;transform:none}}',
       '@keyframes oschat-down{from{opacity:0;transform:translateY(-100%)}',
       'to{opacity:1;transform:none}}',
@@ -382,10 +398,20 @@
     foot.appendChild(lineBreak);
     foot.appendChild(send);
 
+    /* Drag handle: only the phone layout shows it. Pulling it down stretches the sheet
+     * over the whole screen; the page underneath stops scrolling while the card is up,
+     * so the conversation moves instead of the article behind it. */
+    var grip = chatElement('div', 'oschat-grip');
+    grip.setAttribute('role', 'button');
+    grip.setAttribute('aria-label', '向下拖动可全屏');
+    grip.appendChild(chatElement('span', 'oschat-grip__bar'));
+    attachGripDrag(card, grip);
+
     card.appendChild(head);
     card.appendChild(body);
     card.appendChild(note);
     card.appendChild(foot);
+    card.appendChild(grip);
     (document.body || document.documentElement).appendChild(card);
 
     chatDom = {
@@ -468,6 +494,123 @@
   /* focusInput is only set when the visitor opens the card themselves: a card that
    * arrives on its own must not take the keyboard, which on a phone would open it
    * over the page the visitor is reading. */
+  /**
+   * The drag gesture on the handle. Pointer events cover touch, pen and mouse with one
+   * code path; the sheet follows the finger, and past a short distance it snaps to full
+   * height instead of stopping half way.
+   */
+  function attachGripDrag(card, grip) {
+    var startY = 0;
+    var startHeight = 0;
+    var expandedAtStart = false;
+    var dragging = false;
+    /* A drag ends with a click on the handle, so the click handler has to know whether
+     * the pointer really moved before it flips the sheet. */
+    var suppressClick = false;
+
+    function settle(open) {
+      card.classList.toggle('is-full', open);
+      card.style.height = '';
+      card.style.transition = '';
+      /* Only a card that fills the screen takes the page away: the short sheet leaves
+       * the article scrollable behind it. */
+      lockPageScroll(open);
+    }
+
+    function onMove(event) {
+      if (!dragging) {
+        return;
+      }
+      var delta = event.clientY - startY;
+      // Down stretches the short sheet; from full height, pulling back up shrinks it so
+      // the reader can put the article back in view without closing the conversation.
+      var limit = window.innerHeight;
+      var next = expandedAtStart ? startHeight - Math.max(0, -delta)
+        : startHeight + Math.max(0, delta);
+      card.style.height = Math.max(0, Math.min(limit, next)) + 'px';
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+    }
+
+    function onUp(event) {
+      if (!dragging) {
+        return;
+      }
+      dragging = false;
+      var delta = (event.clientY || startY) - startY;
+      suppressClick = Math.abs(delta) > 6;
+      if (expandedAtStart) {
+        settle(delta > -40);
+      } else {
+        settle(delta > 40);
+      }
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    }
+
+    grip.addEventListener('pointerdown', function (event) {
+      if (event.button != null && event.button !== 0) {
+        return;
+      }
+      dragging = true;
+      startY = event.clientY;
+      expandedAtStart = card.classList.contains('is-full');
+      startHeight = card.getBoundingClientRect().height || window.innerHeight;
+      // A finger drag must not also scroll the article behind the sheet.
+      card.style.transition = 'none';
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+    });
+
+    // Tapping the handle is a shortcut for "fill the screen", so the gesture also works
+    // for someone who does not know they can drag it.
+    grip.addEventListener('click', function () {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
+      var open = !card.classList.contains('is-full');
+      card.classList.toggle('is-full', open);
+      lockPageScroll(open);
+    });
+  }
+
+  /** Stops the page behind the card from scrolling while the card covers it. */
+  function lockPageScroll(locked) {
+    var html = document.documentElement;
+    if (locked) {
+      if (pageScrollLocked) {
+        return;
+      }
+      pageScrollLocked = true;
+      savedBodyOverflow = document.body ? document.body.style.overflow : '';
+      savedHtmlOverflow = html ? html.style.overflow : '';
+      if (document.body) {
+        document.body.style.overflow = 'hidden';
+      }
+      if (html) {
+        html.style.overflow = 'hidden';
+      }
+      return;
+    }
+    if (!pageScrollLocked) {
+      return;
+    }
+    pageScrollLocked = false;
+    if (document.body) {
+      document.body.style.overflow = savedBodyOverflow;
+    }
+    if (html) {
+      html.style.overflow = savedHtmlOverflow;
+    }
+  }
+
   function openChat(focusInput) {
     injectChatStyle();
     if (!chatDom) {
@@ -485,19 +628,41 @@
     }
     if (focusInput) {
       askNotifyPermission();
-      try {
-        chatDom.input.focus({ preventScroll: true });
-      } catch (e) {
-        /* focus is best effort */
+      /* A phone treats focus as "open the keyboard", so the panel would cover half the
+       * screen before the visitor asked to type. There the box is only focused when it
+       * is tapped. A desktop has no soft keyboard, so the caret can go straight in. */
+      if (!isPhoneLayout()) {
+        try {
+          chatDom.input.focus({ preventScroll: true });
+        } catch (e) {
+          /* focus is best effort */
+        }
       }
     }
+  }
+
+  /** True on the narrow layout, where focusing a field also raises the keyboard. */
+  function isPhoneLayout() {
+    if (window.matchMedia) {
+      try {
+        if (window.matchMedia('(max-width: 768px)').matches) {
+          return true;
+        }
+      } catch (e) {
+        /* fall through to the width check */
+      }
+    }
+    return window.innerWidth <= 768;
   }
 
   function closeChat() {
     if (chatDom) {
       chatDom.card.style.display = 'none';
+      chatDom.card.classList.remove('is-full');
+      chatDom.card.style.height = '';
     }
     chatOpen = false;
+    lockPageScroll(false);
     renderLauncher();
   }
 
@@ -529,10 +694,46 @@
     svg.setAttribute('aria-hidden', 'true');
     svg.setAttribute('focusable', 'false');
     var path = document.createElementNS(ns, 'path');
-    path.setAttribute('fill', 'currentColor');
+    /* The colour is inline rather than currentColor: a theme page swap removes the
+     * stylesheet for a moment, and currentColor would then inherit the page's black
+     * text and make the mark flicker on every navigation. */
+    path.setAttribute('fill', iconColor());
     path.setAttribute('d', CHAT_ICON_PATH);
     svg.appendChild(path);
     return svg;
+  }
+
+  /** The blog's primary colour, read from the theme when it defines one. */
+  function iconColor() {
+    var fallback = '#39C5BB';
+    try {
+      /* A hidden probe resolves var(--primary) once, so the mark gets a concrete colour:
+       * an SVG fill that still contains a var would be resolved against the SVG itself,
+       * where the theme variable may not be inherited. */
+      var marker = document.getElementById('oschat-color-probe');
+      if (!marker) {
+        marker = document.createElement('span');
+        marker.id = 'oschat-color-probe';
+        marker.style.display = 'none';
+        marker.style.color = 'var(--primary, ' + fallback + ')';
+        (document.body || document.documentElement).appendChild(marker);
+      }
+      var resolved = window.getComputedStyle(marker).color;
+      if (!resolved || resolved === 'rgba(0, 0, 0, 0)' || resolved === '') {
+        return fallback;
+      }
+      // #rrggbb is safe everywhere an SVG fill is accepted.
+      var parts = resolved.match(/\d+/g);
+      if (parts && parts.length >= 3) {
+        return '#' + [parts[0], parts[1], parts[2]].map(function (value) {
+          var hex = Number(value).toString(16);
+          return hex.length === 1 ? '0' + hex : hex;
+        }).join('');
+      }
+      return fallback;
+    } catch (e) {
+      return fallback;
+    }
   }
 
   function navbarRect() {
@@ -595,6 +796,7 @@
        * turns the avatar into a full page image. */
       chatLauncher.style.position = 'fixed';
       chatLauncher.style.zIndex = '40';
+      chatLauncher.style.color = iconColor();
       chatLauncher.style.width = LAUNCHER_SIZE;
       chatLauncher.style.height = LAUNCHER_SIZE;
       chatLauncher.style.padding = '0';
@@ -634,8 +836,26 @@
     heartbeat();
     injectChatStyle();
     reattachChatUi();
+    repaintLauncherIcon();
     if (chatEnabled) {
       pollChat();
+    }
+  }
+
+  /**
+   * A page swap replaces the body, taking the colour probe with it. Painting the mark
+   * again from a freshly resolved colour is what keeps it from flashing when the new
+   * page's stylesheet is not in place yet.
+   */
+  function repaintLauncherIcon() {
+    if (!chatLauncher || !chatLauncher.isConnected) {
+      return;
+    }
+    var colour = iconColor();
+    chatLauncher.style.color = colour;
+    var paths = chatLauncher.querySelectorAll('svg path');
+    for (var i = 0; i < paths.length; i++) {
+      paths[i].setAttribute('fill', colour);
     }
   }
 

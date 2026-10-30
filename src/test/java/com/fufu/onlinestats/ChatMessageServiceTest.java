@@ -234,6 +234,41 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void theGreetingIsWrittenOnceAndWaitsForTheVisitor() {
+        ChatMessageService service = service();
+
+        ChatMessageService.ChatEntry first = service.announceOnce(KEY, "10.0.0.1",
+            "第一次来，随便看看～", "访客消息", "https://cdn.example.com/a.png", "/", "首页");
+        ChatMessageService.ChatEntry second = service.announceOnce(KEY, "10.0.0.1",
+            "第一次来，随便看看～", "访客消息", null, "/", "首页");
+
+        assertTrue(first != null);
+        assertTrue(second == null, "two tabs of one browser must not greet twice");
+        assertEquals("访客消息", first.authorName());
+        assertEquals(1, service.pendingForVisitor(KEY),
+            "nothing displayed it yet, so the next poll opens the card");
+    }
+
+    @Test
+    void aVisitorWhoAlreadyTalkedIsNotGreeted() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "visitor", "我先说了一句", null, null, null, null);
+
+        assertTrue(service.announceOnce(KEY, "10.0.0.1", "第一次来", "访客消息", null,
+            "/", "首页") == null);
+        assertEquals(1, service.thread(KEY).size());
+    }
+
+    @Test
+    void anEmptyGreetingIsNotSent() {
+        ChatMessageService service = service();
+
+        assertTrue(service.announceOnce(KEY, "10.0.0.1", "   ", "访客消息", null,
+            "/", "首页") == null);
+        assertEquals(0, service.thread(KEY).size());
+    }
+
+    @Test
     void messagesOlderThanTheRetentionWindowAreDropped() throws Exception {
         ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
         doReturn(Flux.just(

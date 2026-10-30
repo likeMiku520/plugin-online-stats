@@ -195,6 +195,30 @@ public class ChatMessageService {
         return entry;
     }
 
+    /**
+     * Sends the automatic greeting to a device that has never had a conversation, and
+     * only once. Two tabs of the same browser can arrive at the same moment, so the
+     * decision and the write happen under one lock.
+     *
+     * @return the message that was written, or null when this device already has one
+     */
+    public synchronized ChatEntry announceOnce(String key, String ip, String text,
+                                               String authorName, String authorAvatar,
+                                               String pageUrl, String pageTitle) {
+        if (key == null || text == null || text.isBlank()) {
+            return null;
+        }
+        if (latestSeq(key) > 0 || hasConversation(key)) {
+            return null;
+        }
+        return append(key, ip, "admin", text, authorName, authorAvatar, pageUrl, pageTitle);
+    }
+
+    private boolean hasConversation(String key) {
+        Deque<ChatEntry> thread = conversations.get(key);
+        return thread != null && !thread.isEmpty();
+    }
+
     private void evictOldest(Deque<ChatEntry> thread) {
         while (thread.size() > MAX_PER_CONVERSATION) {
             ChatEntry removed = thread.pollFirst();

@@ -40,8 +40,9 @@ class ChatTransportGuardTest {
     }
 
     private static OnlineStatsSettings settings(Boolean requireHttps) {
-        return new OnlineStatsSettings(null, null, null, null, null, null, null, null, null,
-            null, requireHttps);
+        return OnlineStatsSettings.fromTabs(null,
+            OnlineStatsSettings.tab(java.util.Map.of("chatRequireHttps",
+                String.valueOf(requireHttps))), null, null);
     }
 
     @Test

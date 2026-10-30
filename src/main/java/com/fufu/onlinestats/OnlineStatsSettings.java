@@ -1,7 +1,11 @@
 package com.fufu.onlinestats;
 
+import java.util.Map;
+import java.util.function.Function;
+
 /**
- * Plugin settings, mapped from the "basic" form group of the Setting resource.
+ * Plugin settings, flattened from the tabs of the Setting resource. Each tab is stored
+ * as its own config group, so they are read one by one and merged into this record.
  */
 public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Integer onlineTimeout,
@@ -13,14 +17,73 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   String siteHomepage,
                                   Boolean chatEnabled,
                                   String chatAvatar,
-                                  Boolean chatRequireHttps) {
+                                  Boolean chatRequireHttps,
+                                  Boolean chatAnnounceEnabled,
+                                  String chatAnnounceText,
+                                  String chatAnnounceName,
+                                  String chatAnnounceAvatar) {
 
+    /** Tab groups of the Setting resource. */
     public static final String GROUP = "basic";
+    public static final String GROUP_CHAT = "chat";
+    public static final String GROUP_ANNOUNCE = "announce";
+    public static final String GROUP_DATA = "data";
 
     /** Settings object used when the stored configuration cannot be read. */
     public static OnlineStatsSettings empty() {
         return new OnlineStatsSettings(null, null, null, null, null, null, null, null,
-            null, null, null);
+            null, null, null, null, null, null, null);
+    }
+
+    /** Wraps a stored group, so the merge below can read any of them the same way. */
+    public static final class Partial {
+        private final Function<String, String> value;
+
+        Partial(Function<String, String> value) {
+            this.value = value;
+        }
+
+        Integer number(String key) {
+            String raw = value.apply(key);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            try {
+                return Integer.valueOf(raw.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
+        Long longNumber(String key) {
+            String raw = value.apply(key);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            try {
+                return Long.valueOf(raw.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+
+        Boolean bool(String key) {
+            String raw = value.apply(key);
+            return raw == null || raw.isBlank() ? null : Boolean.valueOf(raw.trim());
+        }
+
+        String text(String key) {
+            return value.apply(key);
+        }
+    }
+
+    /**
+     * Reads one stored tab. A tab nobody has saved yet is simply absent, so a missing
+     * group must not be treated as an error.
+     */
+    public static Partial tab(Map<String, String> stored) {
+        Map<String, String> data = stored == null ? Map.of() : stored;
+        return new Partial(data::get);
     }
 
     /** Avatar every visitor sees on a console message when none is configured. */
@@ -33,6 +96,34 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
      */
     public long officialViewsAdjustmentOrDefault() {
         return officialViewsAdjustment == null ? 0L : officialViewsAdjustment;
+    }
+
+    /**
+     * Builds the whole configuration out of the stored tabs. A tab that was never saved
+     * contributes nothing, which leaves its fields at their built-in defaults.
+     */
+    public static OnlineStatsSettings fromTabs(Partial basic, Partial chat,
+                                               Partial announce, Partial data) {
+        Partial b = basic == null ? tab(null) : basic;
+        Partial c = chat == null ? tab(null) : chat;
+        Partial a = announce == null ? tab(null) : announce;
+        Partial d = data == null ? tab(null) : data;
+        return new OnlineStatsSettings(
+            b.number("heartbeatInterval"),
+            b.number("onlineTimeout"),
+            b.bool("showIpInConsole"),
+            d.text("geoEndpoint"),
+            d.number("historyRetentionDays"),
+            d.number("maxRecords"),
+            b.longNumber("officialViewsAdjustment"),
+            b.text("siteHomepage"),
+            c.bool("chatEnabled"),
+            c.text("chatAvatar"),
+            c.bool("chatRequireHttps"),
+            a.bool("chatAnnounceEnabled"),
+            a.text("chatAnnounceText"),
+            a.text("chatAnnounceName"),
+            a.text("chatAnnounceAvatar"));
     }
 
     /** The blog's own domain, used to filter self referrals out of the source list. */
@@ -72,6 +163,59 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
             return null;
         }
         return value.startsWith("https://") || value.startsWith("http://") ? value : null;
+    }
+
+    /** Name shown on the automatic greeting when none is configured. */
+    public static final String DEFAULT_ANNOUNCE_NAME = "访客消息";
+
+    /** Upper bound for the greeting, matching the chat message limit. */
+    private static final int MAX_ANNOUNCE_LENGTH = 1000;
+
+    /**
+     * Whether a first time visitor should receive the automatic greeting. Turning it on
+     * is enough on its own: the greeting travels over the conversation channel, so the
+     * channel runs for as long as there is something to greet with.
+     */
+    public boolean chatAnnounceActive() {
+        return chatAnnounceEnabled != null && chatAnnounceEnabled && announceText() != null;
+    }
+
+    /**
+     * Whether the conversation channel runs at all: either the owner turned the
+     * conversation on, or there is a greeting to deliver.
+     */
+    public boolean chatChannelEnabled() {
+        return chatEnabledOrDefault() || chatAnnounceActive();
+    }
+
+    /** The greeting text, or null when there is nothing to send. */
+    public String announceText() {
+        if (chatAnnounceText == null || chatAnnounceText.isBlank()) {
+            return null;
+        }
+        String text = chatAnnounceText.replace("\r\n", "\n").trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        return text.length() > MAX_ANNOUNCE_LENGTH
+            ? text.substring(0, MAX_ANNOUNCE_LENGTH) : text;
+    }
+
+    /** Who the greeting appears to come from. */
+    public String announceName() {
+        if (chatAnnounceName == null || chatAnnounceName.isBlank()) {
+            return DEFAULT_ANNOUNCE_NAME;
+        }
+        String name = chatAnnounceName.trim();
+        return name.length() > 40 ? name.substring(0, 40) : name;
+    }
+
+    /** Picture shown next to the greeting, empty when unset. */
+    public String announceAvatar() {
+        if (chatAnnounceAvatar == null || chatAnnounceAvatar.isBlank()) {
+            return null;
+        }
+        return chatAnnounceAvatar.trim();
     }
 
     /**

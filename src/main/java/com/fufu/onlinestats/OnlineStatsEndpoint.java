@@ -158,8 +158,31 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 OnlineVisitor visitor = registry.heartbeat(ip, userAgent, toHeartbeat(body),
                     now, settings.onlineTimeoutMillis());
                 statsService.recordAsync(visitor, settings, now);
+                greet(visitor.getKey(), settings, ip, visitor.getPageUrl(),
+                    visitor.getPageTitle(), isBotVisitor(visitor));
                 return ServerResponse.ok().bodyValue(Map.of("ok", true));
             }));
+    }
+
+    /**
+     * Writes the greeting for a device that has no stored record yet, which is what a
+     * first time visitor looks like. Called from the heartbeat and from the conversation
+     * poll, because either one can be the first request a page makes.
+     */
+    private void greet(String key, OnlineStatsSettings settings, String ip, String pageUrl,
+                       String pageTitle, boolean bot) {
+        if (!settings.chatAnnounceActive() || bot) {
+            return;
+        }
+        if (!recordService.isLoaded() || recordService.get(key) != null) {
+            return;
+        }
+        try {
+            chatService.announceOnce(key, ip, settings.announceText(),
+                settings.announceName(), settings.announceAvatar(), pageUrl, pageTitle);
+        } catch (Exception e) {
+            log.warn("Failed to send the automatic greeting to {}", key, e);
+        }
     }
 
     private OnlineVisitorRegistry.Heartbeat toHeartbeat(Map<String, Object> body) {
@@ -219,7 +242,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .flatMap(settings -> {
                 String config = "window.__ONLINE_STATS__ = { heartbeatInterval: "
                     + settings.heartbeatIntervalOrDefault()
-                    + ", chatEnabled: " + settings.chatEnabledOrDefault()
+                    + ", chatEnabled: " + settings.chatChannelEnabled()
                     + ", chatPollSeconds: " + CHAT_POLL_SECONDS + " };\n";
                 String content = config + readScript();
                 return ServerResponse.ok()
@@ -721,7 +744,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         long since = longValue(request.queryParam("since").orElse(null));
         return fetchSettings().flatMap(settings -> {
             Map<String, Object> payload = new LinkedHashMap<>();
-            boolean enabled = settings.chatEnabledOrDefault();
+            boolean enabled = settings.chatChannelEnabled();
             payload.put("enabled", enabled);
             if (!enabled) {
                 payload.put("messages", List.of());
@@ -732,6 +755,12 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 return insecureTransport();
             }
             String key = deviceKeyOf(request, ip);
+            OnlineVisitor live = registry.get(key);
+            greet(key, settings, ip,
+                live != null ? live.getPageUrl() : null,
+                live != null ? live.getPageTitle() : null,
+                live != null ? isBotVisitor(live)
+                    : UaParser.isBot(request.headers().firstHeader(HttpHeaders.USER_AGENT)));
             payload.put("messages", chatService.poll(key, since, CHAT_POLL_LIMIT).stream()
                 .map(OnlineStatsEndpoint::toChatView).toList());
             payload.put("latestSeq", chatService.latestSeq(key));
@@ -753,7 +782,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .onErrorResume(e -> Mono.empty())
             .defaultIfEmpty(Map.of())
             .flatMap(body -> fetchSettings().flatMap(settings -> {
-                if (!settings.chatEnabledOrDefault()) {
+                if (!settings.chatChannelEnabled()) {
                     return ServerResponse.status(HttpStatus.FORBIDDEN)
                         .bodyValue(Map.of("error", "chat disabled"));
                 }
@@ -801,7 +830,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             boolean showIp = settings.showIpInConsoleOrDefault();
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("loaded", chatService.isLoaded());
-            payload.put("enabled", settings.chatEnabledOrDefault());
+            payload.put("enabled", settings.chatChannelEnabled());
             payload.put("unreadTotal", chatService.unreadTotal());
             payload.put("items", chatService.conversations().stream()
                 .map(conversation -> toConversationView(conversation, showIp)).toList());
@@ -842,7 +871,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("visitorKey", key);
             payload.put("ip", showIp ? ip : maskIp(ip));
-            payload.put("enabled", settings.chatEnabledOrDefault());
+            payload.put("enabled", settings.chatChannelEnabled());
             // Who the conversation is with, so the panel can name them rather than
             // calling everybody "访客".
             payload.put("peerName", peer.name());
@@ -867,7 +896,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .flatMap(body -> fetchSettings().flatMap(settings -> {
                 // The setting is the master switch for the whole feature, so a console
                 // that still has the page open cannot keep sending into a disabled one.
-                if (!settings.chatEnabledOrDefault()) {
+                if (!settings.chatChannelEnabled()) {
                     return ServerResponse.status(HttpStatus.FORBIDDEN)
                         .bodyValue(Map.of("error", "chat disabled"));
                 }
@@ -1055,9 +1084,38 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         }
     }
 
+    /**
+     * Reads every settings tab and merges them. Each tab is its own config group, so
+     * reading only one of them would leave the others at their defaults.
+     */
     private Mono<OnlineStatsSettings> fetchSettings() {
-        return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
+        Mono<Map<String, String>> basic = fetchTab(OnlineStatsSettings.GROUP);
+        Mono<Map<String, String>> chat = fetchTab(OnlineStatsSettings.GROUP_CHAT);
+        Mono<Map<String, String>> announce = fetchTab(OnlineStatsSettings.GROUP_ANNOUNCE);
+        Mono<Map<String, String>> data = fetchTab(OnlineStatsSettings.GROUP_DATA);
+        return Mono.zip(basic, chat, announce, data)
+            .map(tabs -> OnlineStatsSettings.fromTabs(
+                OnlineStatsSettings.tab(tabs.getT1()),
+                OnlineStatsSettings.tab(tabs.getT2()),
+                OnlineStatsSettings.tab(tabs.getT3()),
+                OnlineStatsSettings.tab(tabs.getT4())))
             .defaultIfEmpty(OnlineStatsSettings.empty());
+    }
+
+    /** One tab as a flat key/value map; a tab that was never saved reads as empty. */
+    private Mono<Map<String, String>> fetchTab(String group) {
+        return settingFetcher.get(group)
+            .map(node -> {
+                Map<String, String> values = new java.util.LinkedHashMap<>();
+                node.fields().forEachRemaining(entry -> {
+                    if (entry.getValue() != null && !entry.getValue().isNull()) {
+                        values.put(entry.getKey(), entry.getValue().asText());
+                    }
+                });
+                return values;
+            })
+            .defaultIfEmpty(Map.of())
+            .onErrorReturn(Map.of());
     }
 
     private String resolveClientIp(ServerRequest request) {
