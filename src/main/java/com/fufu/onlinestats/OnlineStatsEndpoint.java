@@ -864,64 +864,14 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
      * save the tab it is editing.
      */
     private Mono<ServerResponse> postGeoReset(ServerRequest request) {
-        if (pluginConfigMapName == null || pluginConfigMapName.isBlank()) {
-            return ServerResponse.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .bodyValue(Map.of("error", "config map unavailable"));
-        }
-        return extensionClient.fetch(run.halo.app.extension.ConfigMap.class, pluginConfigMapName)
-            .flatMap(configMap -> {
-                Map<String, String> data = configMap.getData() == null
-                    ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(configMap.getData());
-                Map<String, Object> group = new java.util.LinkedHashMap<>();
-                String existing = data.get(OnlineStatsSettings.GROUP_DATA);
-                if (existing != null && !existing.isBlank()) {
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode node =
-                            new com.fasterxml.jackson.databind.ObjectMapper().readTree(existing);
-                        node.fields().forEachRemaining(entry ->
-                            group.put(entry.getKey(), entry.getValue().asText("")));
-                    } catch (Exception ignored) {
-                        /* a damaged group is simply replaced */
-                    }
-                }
-                group.put("geoEndpoint", IpGeoService.MIR6_ENDPOINT);
-                group.put("geoParams", "");
-                group.put("geoFields", defaultGeoFieldText());
-                try {
-                    data.put(OnlineStatsSettings.GROUP_DATA,
-                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(group));
-                } catch (Exception e) {
-                    log.warn("Failed to encode the location defaults", e);
-                    return Mono.<Boolean>empty();
-                }
-                configMap.setData(data);
-                return extensionClient.update(configMap)
-                    .thenReturn(Boolean.TRUE);
-            })
+        return applyGeoDefaults()
             .flatMap(saved -> fetchSettings())
             .flatMap(settings -> {
                 Map<String, Object> payload = new java.util.LinkedHashMap<>();
                 payload.put("ok", true);
                 payload.put("endpoint", settings.geoEndpointOrDefault());
-                payload.put("fields", settings.geoFields().stream()
-                    .map(field -> Map.of("label", field.label(), "path", field.path()))
-                    .toList());
                 return ServerResponse.ok().bodyValue(payload);
-            })
-            .switchIfEmpty(ServerResponse.status(HttpStatus.NOT_FOUND)
-                .bodyValue(Map.of("error", "config map not found")));
-    }
-
-    /** The field list as the settings form writes it, one {@code name=path} per line. */
-    private static String defaultGeoFieldText() {
-        StringBuilder text = new StringBuilder();
-        for (OnlineStatsSettings.GeoField field : OnlineStatsSettings.DEFAULT_GEO_FIELDS) {
-            if (text.length() > 0) {
-                text.append('\n');
-            }
-            text.append(field.label()).append('=').append(field.path());
-        }
-        return text.toString();
+            });
     }
 
     private Mono<ServerResponse> getChatMessages(ServerRequest request) {
@@ -1178,12 +1128,80 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             });
         Mono<Map<String, String>> data = fetchTab(OnlineStatsSettings.GROUP_DATA);
         return Mono.zip(basic, chat, announce, data)
+            .doOnNext(tabs -> {
+                // The settings form has no button type, so the reset is triggered by
+                // saving a marker value. It is cleared right after, so the next save
+                // does not repeat it.
+                String token = tabs.getT4() == null ? null : tabs.getT4().get("geoResetToken");
+                if (token != null && "reset".equalsIgnoreCase(token.trim())) {
+                    applyGeoDefaults().subscribe();
+                }
+            })
             .map(tabs -> OnlineStatsSettings.fromTabs(
                 OnlineStatsSettings.tab(tabs.getT1()),
                 OnlineStatsSettings.tab(tabs.getT2()),
                 OnlineStatsSettings.tab(tabs.getT3()),
                 OnlineStatsSettings.tab(tabs.getT4())))
             .defaultIfEmpty(OnlineStatsSettings.empty());
+    }
+
+    /** Writes the shipped location defaults over the data tab and clears the marker. */
+    private Mono<Boolean> applyGeoDefaults() {
+        if (pluginConfigMapName == null || pluginConfigMapName.isBlank()) {
+            return Mono.just(false);
+        }
+        return extensionClient.fetch(run.halo.app.extension.ConfigMap.class, pluginConfigMapName)
+            .flatMap(configMap -> {
+                Map<String, String> data = configMap.getData() == null
+                    ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(configMap.getData());
+                Map<String, Object> group = new java.util.LinkedHashMap<>();
+                String existing = data.get(OnlineStatsSettings.GROUP_DATA);
+                if (existing != null && !existing.isBlank()) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode node =
+                            new com.fasterxml.jackson.databind.ObjectMapper().readTree(existing);
+                        node.fields().forEachRemaining(entry -> {
+                            if (!entry.getValue().isNull()) {
+                                group.put(entry.getKey(), entry.getValue().isTextual()
+                                    ? entry.getValue().asText("") : entry.getValue().toString());
+                            }
+                        });
+                    } catch (Exception ignored) {
+                        /* a damaged group is simply replaced */
+                    }
+                }
+                group.put("geoEndpoint", IpGeoService.MIR6_ENDPOINT);
+                group.put("geoParams", "[]");
+                group.put("geoFields", defaultGeoFieldsJson());
+                group.put("geoResetToken", "");
+                try {
+                    data.put(OnlineStatsSettings.GROUP_DATA,
+                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(group));
+                } catch (Exception e) {
+                    log.warn("Failed to encode the location defaults", e);
+                    return Mono.just(false);
+                }
+                configMap.setData(data);
+                return extensionClient.update(configMap).thenReturn(true);
+            })
+            .onErrorResume(error -> {
+                log.warn("Failed to reset the location settings", error);
+                return Mono.just(false);
+            })
+            .defaultIfEmpty(false);
+    }
+
+    /** The shipped field list, in the shape the repeater stores. */
+    private static String defaultGeoFieldsJson() {
+        try {
+            java.util.List<Map<String, String>> rows = new java.util.ArrayList<>();
+            for (OnlineStatsSettings.GeoField field : OnlineStatsSettings.DEFAULT_GEO_FIELDS) {
+                rows.add(Map.of("label", field.label(), "path", field.path()));
+            }
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(rows);
+        } catch (Exception e) {
+            return "[]";
+        }
     }
 
     /** One tab as a flat key/value map; a tab that was never saved reads as empty. */

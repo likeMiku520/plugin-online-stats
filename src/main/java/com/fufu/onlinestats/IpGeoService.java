@@ -38,14 +38,14 @@ public class IpGeoService {
      * answers with data; the {@code ip?type=json} path this plugin used to ship now
      * returns a PHP warning page.
      */
-    public static final String MIR6_ENDPOINT = "https://api.mir6.com/api/ip_json?ip=%s";
+    public static final String MIR6_ENDPOINT = "https://api.mir6.com/api/ip_json?ip={ip}";
 
     /**
      * Secondary address used when the first one stops answering with data. It answers
      * in GBK, which {@link #decode(byte[])} handles.
      */
     public static final String PCONLINE_ENDPOINT =
-        "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true";
+        "https://whois.pconline.com.cn/ipJson.jsp?ip={ip}&json=true";
 
     public static final String DEFAULT_ENDPOINT = MIR6_ENDPOINT;
 
@@ -88,19 +88,15 @@ public class IpGeoService {
     }
 
     /**
-     * Turns a stored setting into an address that actually answers: an empty or broken
-     * value falls back to the default, a retired provider is replaced, and the retired
-     * path of a working provider is rewritten. A hand written address is kept as is.
-     *
-     * <p>{@code {ip}} is the placeholder going forward. {@code %s} is what earlier
-     * versions asked for and is still accepted, so an existing setting keeps working
-     * and is upgraded on the next save.</p>
+     * Turns a stored setting into an address that actually answers. A stored value that
+     * still uses the retired {@code %s} placeholder is rewritten to {@code {ip}}, which
+     * is the only placeholder now, so an upgrade keeps whatever address was configured.
      */
     public static String normalize(String endpoint) {
         if (endpoint == null || endpoint.isBlank()) {
             return DEFAULT_ENDPOINT;
         }
-        String value = endpoint.trim();
+        String value = upgradePlaceholder(endpoint.trim());
         if (!hasIpPlaceholder(value)) {
             return DEFAULT_ENDPOINT;
         }
@@ -115,26 +111,28 @@ public class IpGeoService {
         return value;
     }
 
+    /**
+     * Whatever earlier versions stored is rewritten in place. The plugin never asks for
+     * {@code %s} again, but a setting written back then still names its address.
+     */
+    public static String upgradePlaceholder(String endpoint) {
+        return endpoint == null ? null : endpoint.replace("%s", "{ip}");
+    }
+
     /** Whether the template says where the address goes. */
     public static boolean hasIpPlaceholder(String endpoint) {
-        return endpoint != null
-            && (endpoint.contains("{ip}") || endpoint.contains("%s"));
+        return endpoint != null && endpoint.contains("{ip}");
     }
 
     /**
      * Fills in the address and any configured extra parameters. Values are encoded, so a
      * token with a plus or an ampersand cannot break the query.
      */
-    static String buildUrl(String template, String ip, java.util.List<OnlineStatsSettings.GeoParam> params) {
-        String url = template;
+    static String buildUrl(String template, String ip,
+                           java.util.List<OnlineStatsSettings.GeoParam> params) {
         String encodedIp = java.net.URLEncoder.encode(ip == null ? "" : ip,
             java.nio.charset.StandardCharsets.UTF_8);
-        if (url.contains("{ip}")) {
-            url = url.replace("{ip}", encodedIp);
-        }
-        if (url.contains("%s")) {
-            url = url.replace("%s", encodedIp);
-        }
+        String url = upgradePlaceholder(template).replace("{ip}", encodedIp);
         if (params == null || params.isEmpty()) {
             return url;
         }

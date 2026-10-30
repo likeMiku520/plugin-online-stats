@@ -89,29 +89,54 @@ spec:
         - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口
-          help: 用 {ip} 表示要查询的地址，例如 https://api.mir6.com/api/ip_json?ip={ip}。属地不会自动查询，只有在点击「查询属地」时才请求。旧的 %s 写法仍然可用。
+          help: 用 {ip} 表示要查询的地址，例如 https://api.mir6.com/api/ip_json?ip={ip}。属地不会自动查询，只有在点击「查询属地」时才请求。
           value: "https://api.mir6.com/api/ip_json?ip={ip}"
-        - $formkit: textarea
+        - $formkit: repeater
           name: geoParams
           label: 附加请求参数
-          rows: 4
-          help: 每行一个，写成 名称=值。会拼到接口地址后面，用来带 token、key 或语言这类参数，例如 token=你的密钥。留空则不加。
-          value: ""
-        - $formkit: textarea
+          help: 会拼到接口地址后面，用来带 token、key 或语言这类参数。点「添加」可以继续加，右侧按钮可以删除或调整顺序。
+          addLabel: 添加参数
+          value: []
+          children:
+            - $formkit: text
+              name: name
+              label: 参数名
+              placeholder: token
+            - $formkit: text
+              name: value
+              label: 参数值
+              placeholder: 你的密钥
+        - $formkit: repeater
           name: geoFields
           label: 要显示的字段
-          rows: 8
           help: |-
-            每行一个，写成 名称=接口返回里的位置。点号可以进到嵌套的对象里，例如 城市=data.city。
-            想显示哪些就写哪些，不想要的行直接删掉；留空则使用插件自带的省市运营商等字段。
-          value: |-
-            国家=country
-            省份=province
-            城市=city
-            区县=districts
-            运营商=isp
-            网络=net
-            归属地=location
+            左侧是访客明细里显示的名称，右侧是接口返回里的位置。点号可以进到嵌套的对象里，例如 data.city。
+            想显示哪些就加哪些，不想要的行直接删掉；全部删掉则使用插件自带的省市运营商等字段。
+          addLabel: 添加字段
+          value:
+            - label: 国家
+              path: country
+            - label: 省份
+              path: province
+            - label: 城市
+              path: city
+            - label: 区县
+              path: districts
+            - label: 运营商
+              path: isp
+            - label: 网络
+              path: net
+            - label: 归属地
+              path: location
+          children:
+            - $formkit: text
+              name: label
+              label: 显示名称
+              placeholder: 城市
+            - $formkit: text
+              name: path
+              label: 接口字段
+              placeholder: data.city
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数
@@ -126,3 +151,10 @@ spec:
           value: 5000
           min: 100
           max: 100000
+        - $formkit: text
+          name: geoResetToken
+          label: 恢复默认属地设置
+          help: |-
+            在这个框里填 reset 再保存本页，接口地址、附加参数和字段列表都会恢复成插件自带的默认值；保存后这一格会自己清空。
+            想取消就清空这一格再保存。
+          value: ""

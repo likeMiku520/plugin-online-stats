@@ -76,24 +76,33 @@ class IpGeoServiceTest {
         // The address the plugin used to ship no longer answers; the stored value is
         // rewritten to the path that still works instead of being dropped.
         assertEquals(IpGeoService.MIR6_ENDPOINT,
-            IpGeoService.normalize("https://api.mir6.com/api/ip?ip=%s&type=json"));
+            IpGeoService.normalize("https://api.mir6.com/api/ip?ip={ip}&type=json"));
         assertEquals(IpGeoService.MIR6_ENDPOINT,
-            IpGeoService.normalize("https://api.mir6.com/api/ip_json?ip=%s"),
+            IpGeoService.normalize("https://api.mir6.com/api/ip_json?ip={ip}"),
             "the working path is left alone");
     }
 
     @Test
     void aRetiredEndpointIsReplacedButAHandWrittenOneIsKept() {
-        assertTrue(IpGeoService.isRetired("http://ip-api.com/json/%s"));
-        assertFalse(IpGeoService.isRetired("https://api.mir6.com/api/ip_json?ip=%s"));
+        assertTrue(IpGeoService.isRetired("http://ip-api.com/json/{ip}"));
+        assertFalse(IpGeoService.isRetired("https://api.mir6.com/api/ip_json?ip={ip}"));
         assertFalse(IpGeoService.isRetired(
-            "https://whois.pconline.com.cn/ipJson.jsp?ip=%s&json=true"));
+            "https://whois.pconline.com.cn/ipJson.jsp?ip={ip}&json=true"));
 
-        service.configure("http://ip-api.com/json/%s");
+        service.configure("http://ip-api.com/json/{ip}");
         assertEquals(IpGeoService.DEFAULT_ENDPOINT, service.endpoint());
 
+        service.configure("https://example.com/geo?ip={ip}");
+        assertEquals("https://example.com/geo?ip={ip}", service.endpoint());
+    }
+
+    @Test
+    void aStoredOldAddressIsUpgradedRatherThanReset() {
+        // %s is gone from the UI, but a setting saved with it still names a real
+        // address, so it is rewritten instead of being thrown away.
         service.configure("https://example.com/geo?ip=%s");
-        assertEquals("https://example.com/geo?ip=%s", service.endpoint());
+
+        assertEquals("https://example.com/geo?ip={ip}", service.endpoint());
     }
 
     @Test

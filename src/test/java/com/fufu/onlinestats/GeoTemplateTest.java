@@ -24,13 +24,48 @@ class GeoTemplateTest {
     }
 
     @Test
-    void theOldPlaceholderStillWorks() {
-        // Settings saved before 3.0.0 use %s; they keep working until saved again.
+    void theStoredListIsWhatTheRepeaterWrites() {
+        // Exactly the JSON the settings repeaters store, one object per row.
+        OnlineStatsSettings settings = OnlineStatsSettings.fromTabs(null, null, null,
+            OnlineStatsSettings.tab(java.util.Map.of(
+                "geoEndpoint", "https://example.com/?ip={ip}",
+                "geoParams", "[{\"name\":\"token\",\"value\":\"abc\"}]",
+                "geoFields", "[{\"label\":\"城市\",\"path\":\"data.city\"}]")));
+
+        assertEquals(1, settings.geoParams().size());
+        assertEquals("token", settings.geoParams().get(0).name());
+        assertEquals("abc", settings.geoParams().get(0).value());
+        assertEquals(1, settings.geoFields().size());
+        assertEquals("城市", settings.geoFields().get(0).label());
+        assertEquals("data.city", settings.geoFields().get(0).path());
+    }
+
+    @Test
+    void aHalfFilledRowIsIgnoredInsteadOfBreakingTheLookup() {
+        OnlineStatsSettings settings = OnlineStatsSettings.fromTabs(null, null, null,
+            OnlineStatsSettings.tab(java.util.Map.of(
+                "geoFields", "[{\"label\":\"城市\",\"path\":\"\"},{\"label\":\"\",\"path\":\"x\"},"
+                    + "{\"label\":\"运营商\",\"path\":\"data.isp\"}]")));
+
+        assertEquals(1, settings.geoFields().size());
+        assertEquals("运营商", settings.geoFields().get(0).label());
+    }
+
+    @Test
+    void onlyTheBracePlaceholderIsTheDocumentedOne() {
+        assertTrue(IpGeoService.hasIpPlaceholder("https://x/?ip={ip}"));
+        assertFalse(IpGeoService.hasIpPlaceholder("https://x/?ip=%s"),
+            "%s is retired");
+        assertFalse(IpGeoService.hasIpPlaceholder("https://x/?ip="));
+    }
+
+    @Test
+    void aStoredOldAddressIsRewrittenToTheNewPlaceholder() {
+        // A setting written when %s was the documented placeholder.
+        assertEquals("https://example.com/?ip={ip}",
+            IpGeoService.upgradePlaceholder("https://example.com/?ip=%s"));
         assertEquals("https://example.com/?ip=" + IP,
             IpGeoService.buildUrl("https://example.com/?ip=%s", IP, List.of()));
-        assertTrue(IpGeoService.hasIpPlaceholder("https://x/?ip=%s"));
-        assertTrue(IpGeoService.hasIpPlaceholder("https://x/?ip={ip}"));
-        assertFalse(IpGeoService.hasIpPlaceholder("https://x/?ip="));
     }
 
     @Test

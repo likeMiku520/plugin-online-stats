@@ -63,8 +63,6 @@ const loading = ref(true)
 const refreshing = ref(false)
 const refreshFailed = ref(false)
 const lastLoadedAt = ref(0)
-const geoResetMessage = ref('')
-const geoResetting = ref(false)
 
 const drill = ref<{
   open: boolean
@@ -171,24 +169,6 @@ const refreshedLabel = computed(() => {
   const pad = (value: number) => String(value).padStart(2, '0')
   return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())} 更新`
 })
-
-/**
- * Puts the location lookup back to the shipped defaults. The settings form can only
- * save the tab being edited, so this needs its own call.
- */
-async function resetGeo() {
-  geoResetting.value = true
-  geoResetMessage.value = ''
-  try {
-    await axios.post(`${api}/statistics/geo-reset`)
-    geoResetMessage.value =
-      '属地查询已恢复默认接口和默认字段，去「插件设置 → 数据与属地」可以看到。'
-  } catch (e) {
-    geoResetMessage.value = '重置失败，请稍后再试。'
-  } finally {
-    geoResetting.value = false
-  }
-}
 
 function fmtDuration(ms: number): string {
   if (!ms || ms <= 0) {
@@ -392,14 +372,6 @@ onUnmounted(() => {
         <button
           class="os-btn os-btn--ghost"
           type="button"
-          :disabled="geoResetting"
-          @click="resetGeo"
-        >
-          {{ geoResetting ? '重置中…' : '重置属地设置' }}
-        </button>
-        <button
-          class="os-btn os-btn--ghost"
-          type="button"
           :disabled="refreshing"
           :class="{ 'is-busy': refreshing }"
           @click="loadAll"
@@ -422,7 +394,6 @@ onUnmounted(() => {
     <div v-if="refreshFailed" class="os-notice os-notice--error">
       这次刷新没有成功，页面上还是上一次的数据，稍后再点一次刷新。
     </div>
-    <div v-if="geoResetMessage" class="os-notice">{{ geoResetMessage }}</div>
 
     <div v-if="overview" class="os-cards">
       <div class="os-card os-card--hero">

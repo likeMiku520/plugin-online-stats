@@ -47,7 +47,8 @@ class TabbedSettingsTest {
         assertEquals("https://cdn.example.com/a.png", settings.chatAvatarOverride());
         assertTrue(settings.chatAnnounceActive());
         assertEquals("欢迎来玩", settings.announceText());
-        assertEquals("https://example.com/geo?ip=%s", settings.geoEndpointOrDefault());
+        assertEquals("https://example.com/geo?ip={ip}", settings.geoEndpointOrDefault(),
+            "a stored %s address is upgraded to {ip} instead of being dropped");
         assertEquals(800, settings.maxRecordsOrDefault());
     }
 

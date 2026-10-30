@@ -142,26 +142,27 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     }
 
     /**
-     * The stored lists are written one per line as {@code name=value}, which is what the
-     * settings form edits. A JSON array is still accepted, because that is the shape
-     * earlier builds of this version wrote.
+     * The two lists are stored as a JSON array of objects, which is what the repeater
+     * input writes. Line based {@code name=value} text is still read, because that is
+     * what the previous version of this setting held.
      */
     private static java.util.List<GeoField> geoFields(String raw) {
-        return readPairs(raw, GeoField::new);
+        return readList(raw, "label", "path", GeoField::new);
     }
 
     private static java.util.List<GeoParam> geoParams(String raw) {
-        return readPairs(raw, GeoParam::new);
+        return readList(raw, "name", "value", GeoParam::new);
     }
 
-    private static <T> java.util.List<T> readPairs(
-        String raw, java.util.function.BiFunction<String, String, T> factory) {
+    private static <T> java.util.List<T> readList(
+        String raw, String nameKey, String valueKey,
+        java.util.function.BiFunction<String, String, T> factory) {
         if (raw == null || raw.isBlank()) {
             return java.util.List.of();
         }
         String text = raw.trim();
         if (text.startsWith("[")) {
-            return readJsonArray(text, factory);
+            return readJsonArray(text, nameKey, valueKey, factory);
         }
         java.util.List<T> list = new java.util.ArrayList<>();
         for (String line : text.split("\n")) {
@@ -180,7 +181,8 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     }
 
     private static <T> java.util.List<T> readJsonArray(
-        String raw, java.util.function.BiFunction<String, String, T> factory) {
+        String raw, String nameKey, String valueKey,
+        java.util.function.BiFunction<String, String, T> factory) {
         try {
             com.fasterxml.jackson.databind.JsonNode node =
                 new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
@@ -189,9 +191,10 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
             }
             java.util.List<T> list = new java.util.ArrayList<>();
             for (com.fasterxml.jackson.databind.JsonNode item : node) {
-                String name = item.path("label").asText(item.path("name").asText("")).trim();
-                String value = item.path("path").asText(item.path("value").asText("")).trim();
-                if (!name.isEmpty()) {
+                String name = item.path(nameKey).asText("").trim();
+                String value = item.path(valueKey).asText("").trim();
+                // A row the reader left half filled is ignored rather than stored broken.
+                if (!name.isEmpty() && !value.isEmpty()) {
                     list.add(factory.apply(name, value));
                 }
             }

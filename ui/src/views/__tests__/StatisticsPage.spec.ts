@@ -91,23 +91,14 @@ describe('the statistics page', () => {
     expect(stamp.text()).toMatch(/\d{2}:\d{2}:\d{2} 更新/)
   })
 
-  it('offers a reset for the location settings', async () => {
-    mocked.post.mockResolvedValue({ data: { ok: true } })
+  it('keeps the page header to the filter and the refresh control', async () => {
+    // The location reset lives in the plugin settings, next to the address it resets.
     const wrapper = mount(StatisticsPage)
     await flushPromises()
 
-    const reset = wrapper
-      .findAll('.os-stat-page__actions button')
-      .find((node) => node.text().includes('重置属地设置'))
-    expect(reset).toBeTruthy()
-
-    await reset!.trigger('click')
-    await flushPromises()
-
-    expect(mocked.post).toHaveBeenCalledWith(
-      expect.stringContaining('/statistics/geo-reset'),
-    )
-    expect(wrapper.text()).toContain('已恢复默认')
+    const labels = wrapper.findAll('.os-stat-page__actions button').map((node) => node.text())
+    expect(labels.some((label) => label.includes('重置'))).toBe(false)
+    expect(labels.some((label) => label.includes('刷新'))).toBe(true)
   })
 
   it('keeps the filter when the trend window changes', async () => {
