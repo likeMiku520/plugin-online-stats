@@ -91,52 +91,29 @@ spec:
           label: IP 属地查询接口
           help: 用 {ip} 表示要查询的地址，例如 https://api.mir6.com/api/ip_json?ip={ip}。属地不会自动查询，只有在点击「查询属地」时才请求。
           value: "https://api.mir6.com/api/ip_json?ip={ip}"
-        - $formkit: repeater
+        - $formkit: textarea
           name: geoParams
           label: 附加请求参数
-          help: 会拼到接口地址后面，用来带 token、key 或语言这类参数。点「添加」可以继续加，右侧按钮可以删除或调整顺序。
-          addLabel: 添加参数
-          value: []
-          children:
-            - $formkit: text
-              name: name
-              label: 参数名
-              placeholder: token
-            - $formkit: text
-              name: value
-              label: 参数值
-              placeholder: 你的密钥
-        - $formkit: repeater
+          rows: 4
+          help: |-
+            每行一个，写成 名称=值，例如 token=你的密钥 或 lang=zh-CN。会拼到接口地址后面，留空则不加。
+            用不上的行整行删掉即可。
+          value: ""
+        - $formkit: textarea
           name: geoFields
           label: 要显示的字段
+          rows: 9
           help: |-
-            左侧是访客明细里显示的名称，右侧是接口返回里的位置。点号可以进到嵌套的对象里，例如 data.city。
-            想显示哪些就加哪些，不想要的行直接删掉；全部删掉则使用插件自带的省市运营商等字段。
-          addLabel: 添加字段
-          value:
-            - label: 国家
-              path: country
-            - label: 省份
-              path: province
-            - label: 城市
-              path: city
-            - label: 区县
-              path: districts
-            - label: 运营商
-              path: isp
-            - label: 网络
-              path: net
-            - label: 归属地
-              path: location
-          children:
-            - $formkit: text
-              name: label
-              label: 显示名称
-              placeholder: 城市
-            - $formkit: text
-              name: path
-              label: 接口字段
-              placeholder: data.city
+            每行一个，写成 显示名称=接口返回里的位置，例如 城市=data.city。点号可以进到嵌套对象里。
+            想显示哪些就留哪些，不想要的行整行删掉；全部删掉则使用插件自带的省市运营商等字段。
+          value: |-
+            国家=country
+            省份=province
+            城市=city
+            区县=districts
+            运营商=isp
+            网络=net
+            归属地=location
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数
