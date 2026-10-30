@@ -19,7 +19,8 @@ public record IpLocation(String ip,
                          String protocol,
                          String location,
                          long resolvedAt,
-                         String error) {
+                         String error,
+                         java.util.Map<String, String> fields) {
 
     public boolean resolved() {
         return location != null || province != null || city != null;
@@ -27,11 +28,13 @@ public record IpLocation(String ip,
 
     public static IpLocation local(String ip) {
         return new IpLocation(ip, null, "本地网络", null, null, null, null, null,
-            null, null, null, null, null, "本地网络", System.currentTimeMillis(), null);
+            null, null, null, null, null, "本地网络", System.currentTimeMillis(), null,
+            java.util.Map.of("location", "本地网络"));
     }
 
     public static IpLocation failed(String ip, String error) {
         return new IpLocation(ip, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, System.currentTimeMillis(), error);
+            null, null, null, null, null, null, System.currentTimeMillis(), error,
+            java.util.Map.of());
     }
 }

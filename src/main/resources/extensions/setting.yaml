@@ -58,16 +58,12 @@ spec:
           label: 对话头像（留空即可）
           help: 留空时，访客看到的头像是发消息那个管理员自己账号的头像；填了图片地址，则所有管理员统一使用这张图。
           value: ""
-
-    - group: announce
-      label: 自动访客消息
-      formSchema:
         - $formkit: checkbox
           name: chatAnnounceEnabled
           label: 启用自动访客消息
           help: |-
             打开后，第一次来的访客会收到一条自动发出的对话，相当于一条公告：页面会直接弹出对话框把内容给他看，他也可以像平常一样接着回复。
-            每个访客设备只发一次；已经聊过的访客不会再收到。打开本项时会一并启用对话通道，不需要另外打开「即时通讯」。
+            每个访客设备只发一次；已经聊过的访客不会再收到。这项需要先打开上面的「即时通讯」。
           value: false
         - $formkit: textarea
           name: chatAnnounceText
@@ -93,8 +89,29 @@ spec:
         - $formkit: text
           name: geoEndpoint
           label: IP 属地查询接口
-          help: 必须包含 %s 作为 IP 占位符。属地不会自动查询，只有在点击「查询属地」时才请求。
-          value: "https://api.mir6.com/api/ip_json?ip=%s"
+          help: 用 {ip} 表示要查询的地址，例如 https://api.mir6.com/api/ip_json?ip={ip}。属地不会自动查询，只有在点击「查询属地」时才请求。旧的 %s 写法仍然可用。
+          value: "https://api.mir6.com/api/ip_json?ip={ip}"
+        - $formkit: textarea
+          name: geoParams
+          label: 附加请求参数
+          rows: 4
+          help: 每行一个，写成 名称=值。会拼到接口地址后面，用来带 token、key 或语言这类参数，例如 token=你的密钥。留空则不加。
+          value: ""
+        - $formkit: textarea
+          name: geoFields
+          label: 要显示的字段
+          rows: 8
+          help: |-
+            每行一个，写成 名称=接口返回里的位置。点号可以进到嵌套的对象里，例如 城市=data.city。
+            想显示哪些就写哪些，不想要的行直接删掉；留空则使用插件自带的省市运营商等字段。
+          value: |-
+            国家=country
+            省份=province
+            城市=city
+            区县=districts
+            运营商=isp
+            网络=net
+            归属地=location
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数

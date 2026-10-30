@@ -33,6 +33,8 @@ const copied = ref('')
 const geoLoading = ref(false)
 const geoError = ref('')
 const geoEndpoint = ref('')
+/** Values returned through the field list configured in the plugin settings. */
+const geoCustomFields = ref<{ label: string; value: string }[]>([])
 
 const chatOpen = ref(false)
 const chatMessages = ref<ChatMessage[]>([])
@@ -156,6 +158,12 @@ async function lookupLocation(force = false) {
       params: { name: detail.value.name },
     })
     geoEndpoint.value = data.endpoint || ''
+    geoCustomFields.value =
+      ((data as unknown as { fields?: Record<string, string> }).fields &&
+        Object.entries((data as unknown as { fields: Record<string, string> }).fields).map(
+          ([label, value]) => ({ label, value }),
+        )) ||
+      []
     if (data.resolved) {
       applyLocation(detail.value, data)
     } else {
@@ -455,6 +463,15 @@ onUnmounted(() => {
           </div>
 
           <dl v-if="detail.geoResolvedAt" class="os-kv">
+            <template v-if="geoCustomFields.length">
+              <template v-for="field in geoCustomFields" :key="field.label">
+                <dt>{{ field.label }}</dt>
+                <dd>{{ field.value }}</dd>
+              </template>
+              <dt>查询时间</dt>
+              <dd>{{ fmtTime(detail.geoResolvedAt) }}</dd>
+            </template>
+            <template v-else>
             <dt>整体属地</dt>
             <dd>{{ detail.location || '—' }}</dd>
             <dt>国家 / 地区</dt>
@@ -484,6 +501,7 @@ onUnmounted(() => {
             <dd>{{ detail.dec || '—' }}</dd>
             <dt>查询时间</dt>
             <dd>{{ fmtTime(detail.geoResolvedAt) }}</dd>
+            </template>
           </dl>
 
           <div v-else class="os-geo-empty">

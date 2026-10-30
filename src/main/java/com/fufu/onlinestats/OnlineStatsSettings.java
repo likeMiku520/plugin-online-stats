@@ -21,7 +21,9 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   Boolean chatAnnounceEnabled,
                                   String chatAnnounceText,
                                   String chatAnnounceName,
-                                  String chatAnnounceAvatar) {
+                                  String chatAnnounceAvatar,
+                                  java.util.List<GeoField> geoFields,
+                                  java.util.List<GeoParam> geoParams) {
 
     /** Tab groups of the Setting resource. */
     public static final String GROUP = "basic";
@@ -29,10 +31,21 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     public static final String GROUP_ANNOUNCE = "announce";
     public static final String GROUP_DATA = "data";
 
+    /**
+     * One value the lookup should show, read from the provider's JSON at {@code path}.
+     * A dot walks into nested objects, so {@code data.city} works for the common shape.
+     */
+    public record GeoField(String label, String path) {
+    }
+
+    /** One extra query parameter appended to the request, like a token or a language. */
+    public record GeoParam(String name, String value) {
+    }
+
     /** Settings object used when the stored configuration cannot be read. */
     public static OnlineStatsSettings empty() {
         return new OnlineStatsSettings(null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null);
+            null, null, null, null, null, null, null, java.util.List.of(), java.util.List.of());
     }
 
     /** Wraps a stored group, so the merge below can read any of them the same way. */
@@ -123,8 +136,82 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
             a.bool("chatAnnounceEnabled"),
             a.text("chatAnnounceText"),
             a.text("chatAnnounceName"),
-            a.text("chatAnnounceAvatar"));
+            a.text("chatAnnounceAvatar"),
+            geoFields(d.text("geoFields")),
+            geoParams(d.text("geoParams")));
     }
+
+    /**
+     * The stored lists are written one per line as {@code name=value}, which is what the
+     * settings form edits. A JSON array is still accepted, because that is the shape
+     * earlier builds of this version wrote.
+     */
+    private static java.util.List<GeoField> geoFields(String raw) {
+        return readPairs(raw, GeoField::new);
+    }
+
+    private static java.util.List<GeoParam> geoParams(String raw) {
+        return readPairs(raw, GeoParam::new);
+    }
+
+    private static <T> java.util.List<T> readPairs(
+        String raw, java.util.function.BiFunction<String, String, T> factory) {
+        if (raw == null || raw.isBlank()) {
+            return java.util.List.of();
+        }
+        String text = raw.trim();
+        if (text.startsWith("[")) {
+            return readJsonArray(text, factory);
+        }
+        java.util.List<T> list = new java.util.ArrayList<>();
+        for (String line : text.split("\n")) {
+            String entry = line.trim();
+            if (entry.isEmpty() || entry.startsWith("#")) {
+                continue;
+            }
+            int split = entry.indexOf('=');
+            String name = (split < 0 ? entry : entry.substring(0, split)).trim();
+            String value = split < 0 ? "" : entry.substring(split + 1).trim();
+            if (!name.isEmpty()) {
+                list.add(factory.apply(name, value));
+            }
+        }
+        return list;
+    }
+
+    private static <T> java.util.List<T> readJsonArray(
+        String raw, java.util.function.BiFunction<String, String, T> factory) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
+            if (!node.isArray()) {
+                return java.util.List.of();
+            }
+            java.util.List<T> list = new java.util.ArrayList<>();
+            for (com.fasterxml.jackson.databind.JsonNode item : node) {
+                String name = item.path("label").asText(item.path("name").asText("")).trim();
+                String value = item.path("path").asText(item.path("value").asText("")).trim();
+                if (!name.isEmpty()) {
+                    list.add(factory.apply(name, value));
+                }
+            }
+            return list;
+        } catch (Exception e) {
+            return java.util.List.of();
+        }
+    }
+
+    /** Fields shown when nothing is configured: the labels the plugin has always used. */
+    public static final java.util.List<GeoField> DEFAULT_GEO_FIELDS = java.util.List.of(
+        new GeoField("国家", "country"),
+        new GeoField("省份", "province"),
+        new GeoField("城市", "city"),
+        new GeoField("区县", "districts"),
+        new GeoField("运营商", "isp"),
+        new GeoField("网络", "net"),
+        new GeoField("区号", "areacode"),
+        new GeoField("邮编", "zipcode"),
+        new GeoField("归属地", "location"));
 
     /** The blog's own domain, used to filter self referrals out of the source list. */
     public String siteHomepageOrDefault() {
@@ -172,20 +259,17 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     private static final int MAX_ANNOUNCE_LENGTH = 1000;
 
     /**
-     * Whether a first time visitor should receive the automatic greeting. Turning it on
-     * is enough on its own: the greeting travels over the conversation channel, so the
-     * channel runs for as long as there is something to greet with.
+     * Whether a first time visitor should receive the automatic greeting. It runs over
+     * the conversation, so the conversation has to be on first.
      */
     public boolean chatAnnounceActive() {
-        return chatAnnounceEnabled != null && chatAnnounceEnabled && announceText() != null;
+        return chatEnabledOrDefault() && chatAnnounceEnabled != null
+            && chatAnnounceEnabled && announceText() != null;
     }
 
-    /**
-     * Whether the conversation channel runs at all: either the owner turned the
-     * conversation on, or there is a greeting to deliver.
-     */
+    /** Whether the conversation channel runs at all. */
     public boolean chatChannelEnabled() {
-        return chatEnabledOrDefault() || chatAnnounceActive();
+        return chatEnabledOrDefault();
     }
 
     /** The greeting text, or null when there is nothing to send. */
@@ -247,6 +331,16 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
         // A stored value is normalised: retired providers are replaced and the retired
         // path of a working provider is rewritten, so an upgrade needs no manual change.
         return IpGeoService.normalize(geoEndpoint);
+    }
+
+    /** Extra query parameters the owner configured for the lookup. */
+    public java.util.List<GeoParam> geoParams() {
+        return geoParams == null || geoParams.isEmpty() ? java.util.List.of() : geoParams;
+    }
+
+    /** Values to show, in the order they were configured; empty means the built-in set. */
+    public java.util.List<GeoField> geoFields() {
+        return geoFields == null ? java.util.List.of() : geoFields;
     }
 
     public int historyRetentionDaysOrDefault() {

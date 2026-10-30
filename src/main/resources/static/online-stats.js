@@ -746,6 +746,13 @@
     // Attributes keep the mark at its intended size even without the stylesheet.
     svg.setAttribute('width', '28');
     svg.setAttribute('height', '28');
+    /* Sized inline as well as by attribute: the stylesheet rule that pins it also goes
+     * away for a frame during a theme page swap, and an SVG with only attributes is
+     * laid out from its own geometry and visibly jumps in size before the rule returns. */
+    svg.style.display = 'block';
+    svg.style.width = '1.75rem';
+    svg.style.height = '1.75rem';
+    svg.style.flex = 'none';
     svg.setAttribute('aria-hidden', 'true');
     svg.setAttribute('focusable', 'false');
     var path = document.createElementNS(ns, 'path');
@@ -877,7 +884,21 @@
     chatLauncher.textContent = '';
     chatLauncher.appendChild(chatIcon());
     if (chatUnread > 0) {
-      chatLauncher.appendChild(chatElement('span', 'oschat-badge', String(chatUnread)));
+      var badge = chatElement('span', 'oschat-badge', String(chatUnread));
+      // Same reason as the mark: the rule that positions it disappears for a frame.
+      badge.style.position = 'absolute';
+      badge.style.top = '-0.25rem';
+      badge.style.right = '-0.25rem';
+      badge.style.minWidth = '1.125rem';
+      badge.style.height = '1.125rem';
+      badge.style.lineHeight = '1.125rem';
+      badge.style.padding = '0 0.25rem';
+      badge.style.fontSize = '0.625rem';
+      badge.style.textAlign = 'center';
+      badge.style.color = '#fff';
+      badge.style.backgroundColor = '#ef4444';
+      badge.style.borderRadius = '9999px';
+      chatLauncher.appendChild(badge);
     }
     chatLauncher.style.display = 'flex';
   }

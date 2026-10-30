@@ -82,6 +82,34 @@ describe('the statistics page', () => {
     expect(wrapper.find('.os-scope button.is-active').text()).toBe('机器人')
   })
 
+  it('tells the reader when the figures were last loaded', async () => {
+    const wrapper = mount(StatisticsPage)
+    await flushPromises()
+
+    const stamp = wrapper.find('.os-stat-page__stamp')
+    expect(stamp.exists()).toBe(true)
+    expect(stamp.text()).toMatch(/\d{2}:\d{2}:\d{2} 更新/)
+  })
+
+  it('offers a reset for the location settings', async () => {
+    mocked.post.mockResolvedValue({ data: { ok: true } })
+    const wrapper = mount(StatisticsPage)
+    await flushPromises()
+
+    const reset = wrapper
+      .findAll('.os-stat-page__actions button')
+      .find((node) => node.text().includes('重置属地设置'))
+    expect(reset).toBeTruthy()
+
+    await reset!.trigger('click')
+    await flushPromises()
+
+    expect(mocked.post).toHaveBeenCalledWith(
+      expect.stringContaining('/statistics/geo-reset'),
+    )
+    expect(wrapper.text()).toContain('已恢复默认')
+  })
+
   it('keeps the filter when the trend window changes', async () => {
     const wrapper = mount(StatisticsPage)
     await flushPromises()

@@ -69,12 +69,30 @@ public class StatisticsQueryService {
             if (record.getMetadata() == null || record.getMetadata().getName() == null) {
                 continue;
             }
-            boolean bot = record.getSpec() != null && Boolean.TRUE.equals(record.getSpec().getBot());
-            if (bot == wantBots) {
+            if (isBot(record.getSpec()) == wantBots) {
                 keys.add(record.getMetadata().getName());
             }
         }
         return keys;
+    }
+
+    /**
+     * Same rule the console uses, so the two scopes always add up to the unfiltered
+     * total. A record whose flag was never written — anything stored by an older
+     * version — used to match neither scope and vanish from both sums.
+     */
+    static boolean isBot(VisitorRecord.Spec spec) {
+        if (spec == null) {
+            return false;
+        }
+        if (spec.getBot() != null) {
+            return spec.getBot();
+        }
+        if (UaParser.isBot(spec.getUserAgent())) {
+            return true;
+        }
+        return spec.getScreen() == null && spec.getViewport() == null
+            && spec.getTimezone() == null && spec.getLanguage() == null;
     }
 
     private static long sumAccepted(Map<String, Long> byVisitor, Set<String> accepted) {

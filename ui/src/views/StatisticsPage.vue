@@ -60,6 +60,11 @@ const articleSort = ref<'views' | 'visitors' | 'today' | 'duration'>('views')
 /** Which visitors every figure on the page is counted over. */
 const scope = ref<'all' | 'human' | 'bot'>('all')
 const loading = ref(true)
+const refreshing = ref(false)
+const refreshFailed = ref(false)
+const lastLoadedAt = ref(0)
+const geoResetMessage = ref('')
+const geoResetting = ref(false)
 
 const drill = ref<{
   open: boolean
@@ -119,6 +124,8 @@ async function lookupGeo(ip: string | null | undefined) {
 
 async function loadAll() {
   loading.value = true
+  refreshing.value = true
+  refreshFailed.value = false
   // Every figure on this page follows the selector at the top right, so the filter is
   // sent with each request instead of being applied to already loaded numbers.
   const filter = { type: scope.value }
@@ -145,10 +152,41 @@ async function loadAll() {
     browsers.value = br.data.items || []
     systems.value = sy.data.items || []
     referers.value = rf.data.items || []
+    lastLoadedAt.value = Date.now()
   } catch (e) {
+    refreshFailed.value = true
     /* keep the previous data, the next poll retries */
   } finally {
     loading.value = false
+    refreshing.value = false
+  }
+}
+
+/** "12:03:41 更新" for the last successful load. */
+const refreshedLabel = computed(() => {
+  if (!lastLoadedAt.value) {
+    return ''
+  }
+  const at = new Date(lastLoadedAt.value)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())} 更新`
+})
+
+/**
+ * Puts the location lookup back to the shipped defaults. The settings form can only
+ * save the tab being edited, so this needs its own call.
+ */
+async function resetGeo() {
+  geoResetting.value = true
+  geoResetMessage.value = ''
+  try {
+    await axios.post(`${api}/statistics/geo-reset`)
+    geoResetMessage.value =
+      '属地查询已恢复默认接口和默认字段，去「插件设置 → 数据与属地」可以看到。'
+  } catch (e) {
+    geoResetMessage.value = '重置失败，请稍后再试。'
+  } finally {
+    geoResetting.value = false
   }
 }
 
@@ -350,7 +388,24 @@ onUnmounted(() => {
             {{ option.label }}
           </button>
         </div>
-        <button class="os-btn os-btn--ghost" type="button" @click="loadAll">刷新</button>
+        <span v-if="refreshedLabel" class="os-stat-page__stamp">{{ refreshedLabel }}</span>
+        <button
+          class="os-btn os-btn--ghost"
+          type="button"
+          :disabled="geoResetting"
+          @click="resetGeo"
+        >
+          {{ geoResetting ? '重置中…' : '重置属地设置' }}
+        </button>
+        <button
+          class="os-btn os-btn--ghost"
+          type="button"
+          :disabled="refreshing"
+          :class="{ 'is-busy': refreshing }"
+          @click="loadAll"
+        >
+          {{ refreshing ? '刷新中…' : '刷新' }}
+        </button>
       </div>
     </header>
 
@@ -364,6 +419,10 @@ onUnmounted(() => {
     >
       修正值 {{ overview?.officialViewsAdjustment }} 正在写入 Halo 官方计数，稍等几秒刷新即可。
     </div>
+    <div v-if="refreshFailed" class="os-notice os-notice--error">
+      这次刷新没有成功，页面上还是上一次的数据，稍后再点一次刷新。
+    </div>
+    <div v-if="geoResetMessage" class="os-notice">{{ geoResetMessage }}</div>
 
     <div v-if="overview" class="os-cards">
       <div class="os-card os-card--hero">
@@ -600,6 +659,12 @@ onUnmounted(() => {
     flex: none;
     gap: 0.5rem;
     align-items: center;
+  }
+
+  &__stamp {
+    font-size: 0.6875rem;
+    color: #9ca3af;
+    white-space: nowrap;
   }
 }
 
@@ -846,6 +911,16 @@ onUnmounted(() => {
   &--tiny {
     padding: 0.125rem 0.5rem;
     font-size: 0.6875rem;
+  }
+
+  /* A refresh that takes a moment has to look like it is doing something. */
+  &.is-busy {
+    cursor: progress;
+    opacity: 0.7;
+  }
+
+  &:disabled {
+    cursor: progress;
   }
 }
 

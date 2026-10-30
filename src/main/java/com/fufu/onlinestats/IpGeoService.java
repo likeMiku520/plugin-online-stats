@@ -70,6 +70,18 @@ public class IpGeoService {
         .build();
 
     private volatile String endpoint = DEFAULT_ENDPOINT;
+    private volatile java.util.List<OnlineStatsSettings.GeoParam> extraParams = java.util.List.of();
+    /**
+     * Which values to show, as configured in the console. Empty means "use the built-in
+     * mapping of the provider that answered", so a fresh install keeps working.
+     */
+    private volatile java.util.List<OnlineStatsSettings.GeoField> configuredFields =
+        java.util.List.of();
+
+    public void setFields(java.util.List<OnlineStatsSettings.GeoField> configured) {
+        this.configuredFields = configured == null ? java.util.List.of()
+            : java.util.List.copyOf(configured);
+    }
 
     public void configure(String endpoint) {
         this.endpoint = normalize(endpoint);
@@ -79,20 +91,66 @@ public class IpGeoService {
      * Turns a stored setting into an address that actually answers: an empty or broken
      * value falls back to the default, a retired provider is replaced, and the retired
      * path of a working provider is rewritten. A hand written address is kept as is.
+     *
+     * <p>{@code {ip}} is the placeholder going forward. {@code %s} is what earlier
+     * versions asked for and is still accepted, so an existing setting keeps working
+     * and is upgraded on the next save.</p>
      */
     public static String normalize(String endpoint) {
-        if (endpoint == null || endpoint.isBlank() || !endpoint.contains("%s")) {
+        if (endpoint == null || endpoint.isBlank()) {
             return DEFAULT_ENDPOINT;
         }
-        if (isRetired(endpoint)) {
+        String value = endpoint.trim();
+        if (!hasIpPlaceholder(value)) {
+            return DEFAULT_ENDPOINT;
+        }
+        if (isRetired(value)) {
             log.info("IP location endpoint {} no longer returns data, using {}",
-                endpoint, DEFAULT_ENDPOINT);
+                value, DEFAULT_ENDPOINT);
             return DEFAULT_ENDPOINT;
         }
-        if (endpoint.toLowerCase(Locale.ROOT).contains(BROKEN_MIR6_PATH)) {
+        if (value.toLowerCase(Locale.ROOT).contains(BROKEN_MIR6_PATH)) {
             return MIR6_ENDPOINT;
         }
-        return endpoint;
+        return value;
+    }
+
+    /** Whether the template says where the address goes. */
+    public static boolean hasIpPlaceholder(String endpoint) {
+        return endpoint != null
+            && (endpoint.contains("{ip}") || endpoint.contains("%s"));
+    }
+
+    /**
+     * Fills in the address and any configured extra parameters. Values are encoded, so a
+     * token with a plus or an ampersand cannot break the query.
+     */
+    static String buildUrl(String template, String ip, java.util.List<OnlineStatsSettings.GeoParam> params) {
+        String url = template;
+        String encodedIp = java.net.URLEncoder.encode(ip == null ? "" : ip,
+            java.nio.charset.StandardCharsets.UTF_8);
+        if (url.contains("{ip}")) {
+            url = url.replace("{ip}", encodedIp);
+        }
+        if (url.contains("%s")) {
+            url = url.replace("%s", encodedIp);
+        }
+        if (params == null || params.isEmpty()) {
+            return url;
+        }
+        StringBuilder extra = new StringBuilder();
+        for (OnlineStatsSettings.GeoParam param : params) {
+            if (param == null || param.name() == null || param.name().isBlank()) {
+                continue;
+            }
+            extra.append(extra.length() == 0 && url.indexOf('?') < 0 ? '?' : '&')
+                .append(java.net.URLEncoder.encode(param.name().trim(),
+                    java.nio.charset.StandardCharsets.UTF_8))
+                .append('=')
+                .append(java.net.URLEncoder.encode(param.value() == null ? "" : param.value(),
+                    java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return url + extra;
     }
 
     /** Whether an address belongs to one of the retired providers. */
@@ -181,15 +239,24 @@ public class IpGeoService {
 
     /** One HTTP call against one address template. */
     private Mono<IpLocation> attempt(String ip, String template) {
+        return attemptUrl(ip, buildUrl(template, ip, extraParams));
+    }
+
+    /** Extra query parameters configured in the console, applied to every request. */
+    public void setExtraParams(java.util.List<OnlineStatsSettings.GeoParam> params) {
+        this.extraParams = params == null ? java.util.List.of() : java.util.List.copyOf(params);
+    }
+
+    private Mono<IpLocation> attemptUrl(String ip, String url) {
         HttpRequest request;
         try {
-            request = HttpRequest.newBuilder(URI.create(String.format(template, ip)))
+            request = HttpRequest.newBuilder(URI.create(url))
                 .timeout(Duration.ofSeconds(10))
                 .header("User-Agent", "Mozilla/5.0 (compatible; halo-online-stats/1.2)")
                 .GET()
                 .build();
         } catch (Exception e) {
-            return Mono.just(IpLocation.failed(ip, "接口地址无效：" + template));
+            return Mono.just(IpLocation.failed(ip, "接口地址无效：" + url));
         }
         CompletableFuture<HttpResponse<byte[]>> future =
             http.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray());
@@ -242,6 +309,10 @@ public class IpGeoService {
         }
         try {
             JsonNode root = mapper.readTree(payload);
+            IpLocation configured = fromFields(ip, root);
+            if (configured != null) {
+                return configured;
+            }
             JsonNode data = root.path("data");
             if (!data.isMissingNode() && root.path("code").asInt(0) == 200) {
                 return fromMir6(ip, data);
@@ -258,6 +329,106 @@ public class IpGeoService {
         } catch (Exception e) {
             return IpLocation.failed(ip, "响应不是合法 JSON：" + stripTags(payload));
         }
+    }
+
+    /**
+     * Reads the response through the paths configured in the console. Returns null when
+     * no custom list was configured, so the built-in mappings keep working untouched.
+     */
+    private IpLocation fromFields(String ip, JsonNode root) {
+        java.util.List<OnlineStatsSettings.GeoField> configured = configuredFields;
+        if (configured == null || configured.isEmpty()) {
+            return null;
+        }
+        java.util.Map<String, String> values = new java.util.LinkedHashMap<>();
+        for (OnlineStatsSettings.GeoField field : configured) {
+            if (field == null || field.label() == null || field.label().isBlank()) {
+                continue;
+            }
+            String value = readPath(root, field.path());
+            if (value != null && !value.isBlank()) {
+                values.put(field.label().trim(), value);
+            }
+        }
+        if (values.isEmpty()) {
+            return null;
+        }
+        // The standard fields are filled from the same map when the configured labels
+        // match, so the console cards keep working with a custom provider.
+        String location = firstOf(values, "location", "归属地", "地区", "地址");
+        if (location == null) {
+            String province = firstOf(values, "province", "省份", "省");
+            String city = firstOf(values, "city", "城市", "市");
+            location = join(province, city);
+        }
+        return new IpLocation(ip,
+            firstOf(values, "dec"),
+            firstOf(values, "country", "国家"),
+            firstOf(values, "countryCode", "国家代码"),
+            firstOf(values, "province", "省份", "省"),
+            firstOf(values, "city", "城市", "市"),
+            firstOf(values, "districts", "区县"),
+            firstOf(values, "isp", "运营商"),
+            firstOf(values, "net", "网络"),
+            firstOf(values, "idc"),
+            firstOf(values, "zipcode", "邮编"),
+            firstOf(values, "areacode", "区号"),
+            firstOf(values, "protocol"),
+            location,
+            System.currentTimeMillis(), null, values);
+    }
+
+    private static String firstOf(java.util.Map<String, String> values, String... keys) {
+        for (String key : keys) {
+            String value = values.get(key);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String join(String first, String second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null || second.equals(first)) {
+            return first;
+        }
+        return first + " " + second;
+    }
+
+    /** Walks a dotted path into the response; the path may be empty for the root. */
+    static String readPath(JsonNode root, String path) {
+        if (root == null) {
+            return null;
+        }
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        JsonNode node = root;
+        for (String part : path.trim().split("\\.")) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            if (node.isArray()) {
+                try {
+                    node = node.path(Integer.parseInt(part));
+                } catch (NumberFormatException e) {
+                    return null;
+                }
+            } else {
+                node = node.path(part);
+            }
+            if (node.isMissingNode() || node.isNull()) {
+                return null;
+            }
+        }
+        if (node.isValueNode()) {
+            String value = node.asText("");
+            return value.isBlank() ? null : value;
+        }
+        return null;
     }
 
     /**
@@ -285,7 +456,7 @@ public class IpGeoService {
         return new IpLocation(ip, null, country, text(root, "countryCode", null),
             province, city, null, networkOf(addr, province, city), null, null,
             null, null, ip != null && ip.contains(":") ? "IPv6" : "IPv4",
-            location, System.currentTimeMillis(), null);
+            location, System.currentTimeMillis(), null, java.util.Map.of());
     }
 
     /**
@@ -333,7 +504,7 @@ public class IpGeoService {
             text(data, "protocol", null),
             text(data, "location", null),
             System.currentTimeMillis(),
-            null);
+            null, java.util.Map.of());
     }
 
     /**
@@ -363,7 +534,7 @@ public class IpGeoService {
             province, city, null, isp, null, text(root, "as", null),
             text(root, "zip", null), null, "IPv4",
             location.toString().trim().isEmpty() ? null : location.toString().trim(),
-            System.currentTimeMillis(), null);
+            System.currentTimeMillis(), null, java.util.Map.of());
     }
 
     private static String text(JsonNode node, String field, String fallback) {

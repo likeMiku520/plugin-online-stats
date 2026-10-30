@@ -65,6 +65,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private final StatisticsQueryService queryService;
     private final ChatMessageService chatService;
     private final ReactiveSettingFetcher settingFetcher;
+    private final run.halo.app.extension.ReactiveExtensionClient extensionClient;
+    private final String pluginConfigMapName;
 
     private static final Logger log = LoggerFactory.getLogger(OnlineStatsEndpoint.class);
 
@@ -77,7 +79,9 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                                StatsAggregationService statsService,
                                StatisticsQueryService queryService,
                                ChatMessageService chatService,
-                               ReactiveSettingFetcher settingFetcher) {
+                               ReactiveSettingFetcher settingFetcher,
+                               run.halo.app.extension.ReactiveExtensionClient extensionClient,
+                               run.halo.app.plugin.PluginContext pluginContext) {
         this.registry = registry;
         this.recordService = recordService;
         this.ipGeoService = ipGeoService;
@@ -85,6 +89,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         this.queryService = queryService;
         this.chatService = chatService;
         this.settingFetcher = settingFetcher;
+        this.extensionClient = extensionClient;
+        this.pluginConfigMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
     @Override
@@ -117,6 +123,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/chat-messages", this::getChatMessages)
             .POST("/chat-send", this::postChatSend)
             .POST("/chat-read-all", this::postChatReadAll)
+            .POST("/statistics/geo-reset", this::postGeoReset)
             .build();
     }
 
@@ -397,6 +404,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return fetchSettings().flatMap(settings -> {
             String usedEndpoint = settings.geoEndpointOrDefault();
             ipGeoService.configure(usedEndpoint);
+            ipGeoService.setExtraParams(settings.geoParams());
+            ipGeoService.setFields(settings.geoFields());
             String ip = queryIp;
             if (ip.isBlank() && !recordName.isBlank()) {
                 VisitorRecord record = recordService.get(recordName);
@@ -430,7 +439,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             location.districts(), location.isp(), location.net(), location.idc(),
             location.zipcode(), location.areacode(), location.protocol(),
             location.location(), location.resolvedAt(), location.resolved(),
-            location.error(), endpoint);
+            location.error(), endpoint,
+            location.fields() == null ? Map.of() : location.fields());
     }
 
     private static String botReason(VisitorRecord.Spec spec) {
@@ -848,6 +858,72 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return ServerResponse.ok().bodyValue(payload);
     }
 
+    /**
+     * Puts the location lookup back to the shipped defaults: address, extra parameters
+     * and the field list. The console button calls this because a settings form can only
+     * save the tab it is editing.
+     */
+    private Mono<ServerResponse> postGeoReset(ServerRequest request) {
+        if (pluginConfigMapName == null || pluginConfigMapName.isBlank()) {
+            return ServerResponse.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .bodyValue(Map.of("error", "config map unavailable"));
+        }
+        return extensionClient.fetch(run.halo.app.extension.ConfigMap.class, pluginConfigMapName)
+            .flatMap(configMap -> {
+                Map<String, String> data = configMap.getData() == null
+                    ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(configMap.getData());
+                Map<String, Object> group = new java.util.LinkedHashMap<>();
+                String existing = data.get(OnlineStatsSettings.GROUP_DATA);
+                if (existing != null && !existing.isBlank()) {
+                    try {
+                        com.fasterxml.jackson.databind.JsonNode node =
+                            new com.fasterxml.jackson.databind.ObjectMapper().readTree(existing);
+                        node.fields().forEachRemaining(entry ->
+                            group.put(entry.getKey(), entry.getValue().asText("")));
+                    } catch (Exception ignored) {
+                        /* a damaged group is simply replaced */
+                    }
+                }
+                group.put("geoEndpoint", IpGeoService.MIR6_ENDPOINT);
+                group.put("geoParams", "");
+                group.put("geoFields", defaultGeoFieldText());
+                try {
+                    data.put(OnlineStatsSettings.GROUP_DATA,
+                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(group));
+                } catch (Exception e) {
+                    log.warn("Failed to encode the location defaults", e);
+                    return Mono.<Boolean>empty();
+                }
+                configMap.setData(data);
+                return extensionClient.update(configMap)
+                    .thenReturn(Boolean.TRUE);
+            })
+            .flatMap(saved -> fetchSettings())
+            .flatMap(settings -> {
+                Map<String, Object> payload = new java.util.LinkedHashMap<>();
+                payload.put("ok", true);
+                payload.put("endpoint", settings.geoEndpointOrDefault());
+                payload.put("fields", settings.geoFields().stream()
+                    .map(field -> Map.of("label", field.label(), "path", field.path()))
+                    .toList());
+                return ServerResponse.ok().bodyValue(payload);
+            })
+            .switchIfEmpty(ServerResponse.status(HttpStatus.NOT_FOUND)
+                .bodyValue(Map.of("error", "config map not found")));
+    }
+
+    /** The field list as the settings form writes it, one {@code name=path} per line. */
+    private static String defaultGeoFieldText() {
+        StringBuilder text = new StringBuilder();
+        for (OnlineStatsSettings.GeoField field : OnlineStatsSettings.DEFAULT_GEO_FIELDS) {
+            if (text.length() > 0) {
+                text.append('\n');
+            }
+            text.append(field.label()).append('=').append(field.path());
+        }
+        return text.toString();
+    }
+
     private Mono<ServerResponse> getChatMessages(ServerRequest request) {
         String key = request.queryParam("key").orElse("").trim();
         if (key.isBlank()) {
@@ -1091,7 +1167,15 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private Mono<OnlineStatsSettings> fetchSettings() {
         Mono<Map<String, String>> basic = fetchTab(OnlineStatsSettings.GROUP);
         Mono<Map<String, String>> chat = fetchTab(OnlineStatsSettings.GROUP_CHAT);
-        Mono<Map<String, String>> announce = fetchTab(OnlineStatsSettings.GROUP_ANNOUNCE);
+        // The greeting lives on the conversation tab now; the old group is still read so
+        // an install that saved it there keeps working.
+        Mono<Map<String, String>> announce = fetchTab(OnlineStatsSettings.GROUP_ANNOUNCE)
+            .zipWith(fetchTab(OnlineStatsSettings.GROUP_CHAT))
+            .map(pair -> {
+                Map<String, String> merged = new java.util.LinkedHashMap<>(pair.getT2());
+                merged.putAll(pair.getT1());
+                return merged;
+            });
         Mono<Map<String, String>> data = fetchTab(OnlineStatsSettings.GROUP_DATA);
         return Mono.zip(basic, chat, announce, data)
             .map(tabs -> OnlineStatsSettings.fromTabs(
@@ -1158,7 +1242,8 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                                long resolvedAt,
                                boolean resolved,
                                String error,
-                               String endpoint) {
+                               String endpoint,
+                               Map<String, String> fields) {
     }
 
     public record RecordView(String name,

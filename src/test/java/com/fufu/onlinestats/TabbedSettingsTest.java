@@ -73,12 +73,17 @@ class TabbedSettingsTest {
     }
 
     @Test
-    void theGreetingRunsWithoutTheOtherSwitch() {
-        OnlineStatsSettings settings = merge(null, tab("chatEnabled", "false"),
+    void theGreetingNeedsTheConversationSwitchedOn() {
+        // The greeting rides on the conversation, so it stays quiet until that is on.
+        OnlineStatsSettings off = merge(null, tab("chatEnabled", "false"),
             tab("chatAnnounceEnabled", "true", "chatAnnounceText", "公告"), null);
+        assertFalse(off.chatAnnounceActive());
+        assertFalse(off.chatChannelEnabled());
 
-        assertTrue(settings.chatAnnounceActive());
-        assertTrue(settings.chatChannelEnabled(), "otherwise no page would ever poll");
+        OnlineStatsSettings on = merge(null, tab("chatEnabled", "true"),
+            tab("chatAnnounceEnabled", "true", "chatAnnounceText", "公告"), null);
+        assertTrue(on.chatAnnounceActive());
+        assertTrue(on.chatChannelEnabled());
     }
 
     @Test
