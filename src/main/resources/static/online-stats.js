@@ -719,18 +719,23 @@
         (document.body || document.documentElement).appendChild(marker);
       }
       var resolved = window.getComputedStyle(marker).color;
-      if (!resolved || resolved === 'rgba(0, 0, 0, 0)' || resolved === '') {
+      if (!resolved) {
         return fallback;
       }
-      // #rrggbb is safe everywhere an SVG fill is accepted.
-      var parts = resolved.match(/\d+/g);
-      if (parts && parts.length >= 3) {
-        return '#' + [parts[0], parts[1], parts[2]].map(function (value) {
-          var hex = Number(value).toString(16);
-          return hex.length === 1 ? '0' + hex : hex;
-        }).join('');
+      resolved = resolved.trim();
+      /* The value is used exactly as the browser reports it. Themes declare --primary as
+       * oklch(), color() or rgb(), and turning those into a hex by reading out the first
+       * three numbers turns a colour into near black, so nothing is converted here. */
+      if (!resolved || resolved === 'rgba(0, 0, 0, 0)' || resolved === 'transparent') {
+        return fallback;
       }
-      return fallback;
+      // An engine that hands back the var() itself has not resolved anything: painting
+      // that on the icon would resolve it inside the SVG, where the theme variable is
+      // not inherited.
+      if (resolved.indexOf('var(') >= 0) {
+        return fallback;
+      }
+      return resolved;
     } catch (e) {
       return fallback;
     }
