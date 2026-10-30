@@ -684,6 +684,61 @@
     '1-1.35-1.3l2.39-5.37a2 2 0 0 0 .08-.22h6.89a1 1 0 0 0 0-2H6.57a2 2 0 0 0-.08-.22L4.1 ' +
     '5.41a1 1 0 0 1 1.35-1.3l14 7a1 1 0 0 1 0 1.78';
 
+  /** A colour from the theme, or null when the page does not define it. */
+  function cssColor(variable, fallback) {
+    try {
+      var marker = document.getElementById('oschat-surface-probe');
+      if (!marker) {
+        marker = document.createElement('span');
+        marker.id = 'oschat-surface-probe';
+        marker.style.display = 'none';
+        (document.body || document.documentElement).appendChild(marker);
+      }
+      marker.style.color = 'var(' + variable + ', ' + fallback + ')';
+      var resolved = window.getComputedStyle(marker).color;
+      if (!resolved) {
+        return null;
+      }
+      resolved = resolved.trim();
+      if (!resolved || resolved === 'rgba(0, 0, 0, 0)' || resolved === 'transparent'
+          || resolved.indexOf('var(') >= 0) {
+        return fallback;
+      }
+      return resolved;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  function isDarkTheme() {
+    var root = document.documentElement;
+    if (!root) {
+      return false;
+    }
+    if (root.classList && root.classList.contains('dark')) {
+      return true;
+    }
+    if (root.getAttribute && root.getAttribute('data-theme') === 'dark') {
+      return true;
+    }
+    try {
+      return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** Background and shadow of the floating button, kept inline so they never blink. */
+  function applyLauncherSurface(node) {
+    if (!node) {
+      return;
+    }
+    var dark = isDarkTheme();
+    node.style.backgroundColor = cssColor('--card-bg', dark ? '#1e293b' : '#ffffff');
+    node.style.boxShadow = '0 4px 16px -4px rgba(0, 0, 0, .3)';
+    node.style.borderRadius = '1rem';
+  }
+
   function chatIcon() {
     var ns = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(ns, 'svg');
@@ -802,6 +857,9 @@
       chatLauncher.style.position = 'fixed';
       chatLauncher.style.zIndex = '40';
       chatLauncher.style.color = iconColor();
+      /* Inline like the geometry: a theme page swap drops the stylesheet for a moment,
+       * and a background that lived only there left the button see through for a frame. */
+      applyLauncherSurface(chatLauncher);
       chatLauncher.style.width = LAUNCHER_SIZE;
       chatLauncher.style.height = LAUNCHER_SIZE;
       chatLauncher.style.padding = '0';
@@ -858,6 +916,7 @@
     }
     var colour = iconColor();
     chatLauncher.style.color = colour;
+    applyLauncherSurface(chatLauncher);
     var paths = chatLauncher.querySelectorAll('svg path');
     for (var i = 0; i < paths.length; i++) {
       paths[i].setAttribute('fill', colour);
