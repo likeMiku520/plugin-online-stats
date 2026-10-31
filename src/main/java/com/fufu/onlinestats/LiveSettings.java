@@ -99,6 +99,33 @@ public class LiveSettings {
                 OnlineStatsSettings.tab(null)));
     }
 
+    /**
+     * The conversation tab including a greeting that an older version saved under its own
+     * group. The current tab wins, so an edit made now is not overridden by that leftover.
+     */
+    public Optional<OnlineStatsSettings> effectiveChatSettings(String configMapName) {
+        Map<String, String> legacy = group(configMapName, OnlineStatsSettings.GROUP_ANNOUNCE)
+            .orElse(Map.of());
+        Map<String, String> current = group(configMapName, OnlineStatsSettings.GROUP_CHAT)
+            .orElse(Map.of());
+        if (legacy.isEmpty() && current.isEmpty()) {
+            return Optional.empty();
+        }
+        Map<String, String> merged = OnlineStatsSettings.mergeGreeting(legacy, current);
+        return Optional.of(OnlineStatsSettings.fromTabs(
+            OnlineStatsSettings.tab(null),
+            OnlineStatsSettings.tab(merged),
+            OnlineStatsSettings.tab(merged),
+            OnlineStatsSettings.tab(null)));
+    }
+
+    /** The greeting values as they apply right now, legacy group included. */
+    public Map<String, String> greetingValues(String configMapName) {
+        return OnlineStatsSettings.mergeGreeting(
+            group(configMapName, OnlineStatsSettings.GROUP_ANNOUNCE).orElse(Map.of()),
+            group(configMapName, OnlineStatsSettings.GROUP_CHAT).orElse(Map.of()));
+    }
+
     private record Cached(Optional<Map<String, String>> values, long at) {
     }
 }

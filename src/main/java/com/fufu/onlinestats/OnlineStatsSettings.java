@@ -99,6 +99,29 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
         return new Partial(data::get);
     }
 
+    /**
+     * The conversation tab together with the greeting an older version saved under its
+     * own group.
+     *
+     * <p>The current tab wins. Reading it the other way round meant a leftover copy in
+     * the legacy group silently overrode every later edit, which looked exactly like the
+     * greeting refusing to change.</p>
+     *
+     * @param legacy  the old {@code announce} group, which may be empty
+     * @param current the {@code chat} group
+     */
+    public static Map<String, String> mergeGreeting(Map<String, String> legacy,
+                                                    Map<String, String> current) {
+        Map<String, String> merged = new java.util.LinkedHashMap<>();
+        if (legacy != null) {
+            merged.putAll(legacy);
+        }
+        if (current != null) {
+            merged.putAll(current);
+        }
+        return merged;
+    }
+
     /** Avatar every visitor sees on a console message when none is configured. */
     public static final String DEFAULT_CHAT_AVATAR =
         "https://blog.fufu520.cn/upload/fufu_touming.webp";

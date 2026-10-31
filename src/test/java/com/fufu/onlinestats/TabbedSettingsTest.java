@@ -34,6 +34,32 @@ class TabbedSettingsTest {
     }
 
     @Test
+    void theCurrentTabWinsOverALeftoverInTheOldGroup() {
+        // An install that saved the greeting before it moved to the conversation tab.
+        java.util.Map<String, String> legacy = tab("chatAnnounceText", "第一次保存的内容");
+        java.util.Map<String, String> current = tab("chatAnnounceText", "后来改的内容");
+
+        java.util.Map<String, String> merged =
+            OnlineStatsSettings.mergeGreeting(legacy, current);
+
+        assertEquals("后来改的内容", merged.get("chatAnnounceText"),
+            "an edit in the current tab must not be overridden by the old group");
+    }
+
+    @Test
+    void theOldGroupStillSuppliesWhatTheCurrentOneDoesNotHave() {
+        java.util.Map<String, String> legacy = tab("chatAnnounceText", "老的内容",
+            "chatAnnounceName", "老名字");
+        java.util.Map<String, String> current = tab("chatAnnounceText", "新内容");
+
+        java.util.Map<String, String> merged =
+            OnlineStatsSettings.mergeGreeting(legacy, current);
+
+        assertEquals("新内容", merged.get("chatAnnounceText"));
+        assertEquals("老名字", merged.get("chatAnnounceName"), "the rest is kept");
+    }
+
+    @Test
     void everyTabIsReadFromItsOwnGroup() {
         OnlineStatsSettings settings = merge(
             tab("heartbeatInterval", "20", "siteHomepage", "blog.fufu520.cn"),

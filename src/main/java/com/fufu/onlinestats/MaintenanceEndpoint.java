@@ -47,15 +47,18 @@ public class MaintenanceEndpoint implements CustomEndpoint {
     private final VisitorRecordService recordService;
     private final ChatMessageService chatService;
     private final LiveSettings liveSettings;
+    private final OnlineVisitorRegistry registry;
     private final String configMapName;
 
     public MaintenanceEndpoint(VisitorRecordService recordService,
                                ChatMessageService chatService,
                                LiveSettings liveSettings,
+                               OnlineVisitorRegistry registry,
                                PluginContext pluginContext) {
         this.recordService = recordService;
         this.chatService = chatService;
         this.liveSettings = liveSettings;
+        this.registry = registry;
         this.configMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
@@ -207,6 +210,8 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             row.put("pageTitle", spec.getLastPageTitle());
             row.put("userAgent", spec.getUserAgent());
             row.put("bot", bot);
+            // The light means "online", the same thing it means in the visitor list.
+            row.put("online", isOnline(record.getMetadata().getName()));
             row.put("firstSeenAt", spec.getFirstSeenAt());
             row.put("lastSeenAt", spec.getLastSeenAt());
             row.put("visitCount", spec.getVisitCount());
@@ -238,6 +243,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             row.put("ip", ip);
             row.put("location", spec == null ? null : spec.getLocation());
             row.put("bot", bot);
+            row.put("online", isOnline(key));
             row.put("total", chatService.thread(key).size());
             row.put("lastText", last == null ? "" : last.text());
             row.put("lastAt", last == null ? 0L : last.sentAt());
@@ -383,8 +389,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
 
     /** Whether the test button should be offered at all. */
     private Mono<ServerResponse> announceEnabled(ServerRequest request) {
-        Map<String, String> chat = liveSettings.group(configMapName, OnlineStatsSettings.GROUP_CHAT)
-            .orElse(Map.of());
+        Map<String, String> chat = liveSettings.greetingValues(configMapName);
         String text = chat.get("chatAnnounceText");
         String enabled = chat.get("chatAnnounceEnabled");
         boolean on = "true".equalsIgnoreCase(enabled) && text != null && !text.isBlank();
@@ -409,8 +414,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                     return ServerResponse.badRequest().bodyValue(Map.of("error", "缺少访客"));
                 }
                 // Read live, so the text that was just saved in the console is the one sent.
-                Map<String, String> chat = liveSettings
-                    .group(configMapName, OnlineStatsSettings.GROUP_CHAT).orElse(Map.of());
+                Map<String, String> chat = liveSettings.greetingValues(configMapName);
                 String text = chat.get("chatAnnounceText");
                 if (text == null || text.isBlank()) {
                     return ServerResponse.badRequest()
@@ -428,6 +432,18 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                 payload.put("text", text);
                 return ServerResponse.ok().bodyValue(payload);
             });
+    }
+
+    /** Whether that device is currently reporting a heartbeat. */
+    private boolean isOnline(String key) {
+        if (key == null) {
+            return false;
+        }
+        try {
+            return registry.get(key) != null;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private static int intParam(ServerRequest request, String name, int fallback) {

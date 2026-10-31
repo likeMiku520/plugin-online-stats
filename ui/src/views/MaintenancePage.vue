@@ -11,6 +11,7 @@ interface VisitorRow {
   pageTitle: string | null
   userAgent: string | null
   bot: boolean
+  online: boolean
   firstSeenAt: number
   lastSeenAt: number
   visitCount: number
@@ -22,6 +23,7 @@ interface ConversationRow {
   ip: string | null
   location: string | null
   bot: boolean
+  online: boolean
   total: number
   lastText: string
   lastAt: number
@@ -79,6 +81,8 @@ const totalPages = ref(1)
 const multiSelect = ref(false)
 const selected = ref<string[]>([])
 const detail = ref<RecordView | null>(null)
+const rowBusy = ref<Record<string, boolean>>({})
+const rowError = ref<Record<string, string>>({})
 const threadOpen = ref(false)
 const threadKey = ref<string | null>(null)
 const threadTitle = ref('')
@@ -205,6 +209,39 @@ function toggleAll() {
         selected.value.push(row.visitorKey)
       }
     }
+  }
+}
+
+/** Fills in the location of one visitor, the same call the visitor list makes. */
+async function lookupRow(row: VisitorRow | ConversationRow) {
+  const key = row.visitorKey
+  if (rowBusy.value[key]) {
+    return
+  }
+  rowBusy.value = { ...rowBusy.value, [key]: true }
+  rowError.value = { ...rowError.value, [key]: '' }
+  try {
+    const { data } = await axios.get(`${api}/location`, { params: { name: key } })
+    if (data.resolved) {
+      const at = rows.value.find((item) => item.visitorKey === key)
+      if (at) {
+        at.location = [data.country, data.province, data.city, data.districts]
+          .filter((part: string | null) => part)
+          .join(' ')
+        if (!at.location) {
+          at.location = data.location ?? null
+        }
+      }
+    } else {
+      rowError.value = { ...rowError.value, [key]: data.error || '查询失败' }
+    }
+  } catch (e: any) {
+    rowError.value = {
+      ...rowError.value,
+      [key]: e?.response?.status === 403 ? '没有权限' : '查询失败',
+    }
+  } finally {
+    rowBusy.value = { ...rowBusy.value, [key]: false }
   }
 }
 
@@ -599,13 +636,25 @@ onUnmounted(() => {
             </td>
             <td>
               <div class="os-visitor">
-                <span class="os-dot" :class="{ 'os-dot--bot': row.bot }" />
+                <span class="os-dot" :class="{ 'os-dot--online': row.online }" />
                 <div>
                   <div class="os-visitor__ip">{{ row.ip || row.visitorKey }}</div>
                   <div class="os-visitor__loc">
                     <span v-if="row.bot" class="os-badge os-badge--bot">机器人</span>
-                    <span v-else class="os-badge">真人</span>
                     <template v-if="row.location">{{ row.location }}</template>
+                    <template v-else-if="scope === 'visitors'">
+                      <button
+                        class="os-loc-btn"
+                        type="button"
+                        :disabled="rowBusy[row.visitorKey]"
+                        @click.stop="lookupRow(row)"
+                      >
+                        {{ rowBusy[row.visitorKey] ? '查询中…' : '查询属地' }}
+                      </button>
+                    </template>
+                    <span v-if="rowError[row.visitorKey]" class="os-loc-error">
+                      {{ rowError[row.visitorKey] }}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -962,14 +1011,40 @@ onUnmounted(() => {
   width: 0.5rem;
   height: 0.5rem;
   margin-top: 0.375rem;
-  background: #39c5bb;
+  background: #d1d5db;
   border-radius: 9999px;
-  box-shadow: 0 0 0 3px rgb(57 197 187 / 0.18);
 
-  &--bot {
-    background: #d1d5db;
-    box-shadow: none;
+  &--online {
+    background: #39c5bb;
+    box-shadow: 0 0 0 3px rgb(57 197 187 / 0.18);
   }
+}
+
+.os-loc-btn {
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: #1b9c93;
+  cursor: pointer;
+  background: #e8f9f7;
+  border: 1px solid #b9e7e3;
+  border-radius: 0.25rem;
+
+  &:hover:not(:disabled) {
+    background: #d5f3f0;
+  }
+
+  &:disabled {
+    color: #9ca3af;
+    cursor: not-allowed;
+    background: #f9fafb;
+    border-color: #e5e7eb;
+  }
+}
+
+.os-loc-error {
+  font-size: 0.6875rem;
+  color: #b91c1c;
 }
 
 .os-device {

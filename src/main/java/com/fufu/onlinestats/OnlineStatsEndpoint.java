@@ -191,7 +191,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
          * clear, so relying on the settings object meant a guest could still receive the
          * text that was saved the first time. The stored values win; the object is only a
          * fallback for when the store cannot be read at all. */
-        OnlineStatsSettings stored = liveSettings.chatSettings(pluginConfigMapName).orElse(null);
+        OnlineStatsSettings stored = liveSettings.effectiveChatSettings(pluginConfigMapName).orElse(null);
         OnlineStatsSettings effective = stored != null ? stored : settings;
         if (!effective.chatAnnounceActive()) {
             return;
@@ -1129,11 +1129,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         // an install that saved it there keeps working.
         Mono<Map<String, String>> announce = fetchTab(OnlineStatsSettings.GROUP_ANNOUNCE)
             .zipWith(fetchTab(OnlineStatsSettings.GROUP_CHAT))
-            .map(pair -> {
-                Map<String, String> merged = new java.util.LinkedHashMap<>(pair.getT2());
-                merged.putAll(pair.getT1());
-                return merged;
-            });
+            .map(pair -> OnlineStatsSettings.mergeGreeting(pair.getT1(), pair.getT2()));
         Mono<Map<String, String>> data = fetchTab(OnlineStatsSettings.GROUP_DATA);
         return Mono.zip(basic, chat, announce, data)
             .map(tabs -> OnlineStatsSettings.fromTabs(

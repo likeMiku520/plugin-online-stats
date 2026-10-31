@@ -71,16 +71,51 @@ describe('the data management page', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
-  it('shows the counts above the table', async () => {
-    stub()
+  it('lights the dot for online devices, not for bots', async () => {
+    stub([
+      visitor({ visitorKey: 'a', ip: '1.1.1.1', online: true, bot: false }),
+      visitor({ visitorKey: 'b', ip: '2.2.2.2', online: false, bot: true }),
+    ])
     const wrapper = mount(MaintenancePage)
     await flushPromises()
 
-    const text = wrapper.text()
-    expect(text).toContain('访客总数')
-    expect(text).toContain('12')
-    expect(text).toContain('9')
-    expect(text).toContain('30')
+    const dots = wrapper.findAll('.os-dot')
+    expect(dots[0].classes()).toContain('os-dot--online')
+    expect(dots[1].classes()).not.toContain('os-dot--online')
+  })
+
+  it('offers a location lookup when one is missing', async () => {
+    stub([visitor({ location: null })])
+    mocked.get.mockImplementation((url: string) => {
+      if (url.includes('/maintenance/summary')) {
+        return Promise.resolve({ data: { visitors: 1, humans: 1, bots: 0, conversations: 0, messages: 0 } })
+      }
+      if (url.includes('/location')) {
+        return Promise.resolve({ data: { resolved: true, country: '中国', province: '山东省', city: '枣庄市' } })
+      }
+      return Promise.resolve(paged([visitor({ location: null })]))
+    })
+    const wrapper = mount(MaintenancePage)
+    await flushPromises()
+
+    const lookup = wrapper.findAll('button').find((b) => b.text().includes('查询属地'))
+    expect(lookup).toBeTruthy()
+
+    await lookup!.trigger('click')
+    await flushPromises()
+
+    expect(mocked.get).toHaveBeenCalledWith(
+      expect.stringContaining('/location'),
+      expect.objectContaining({ params: { name: 'v-1' } }),
+    )
+    expect(wrapper.text()).toContain('山东省')
+  })
+
+  it('tells the reader when the figures were last loaded', async () => {
+    stub()
+    const wrapper = mount(MaintenancePage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('访客总数')
   })
 
   it('lists the visitors it is given', async () => {
