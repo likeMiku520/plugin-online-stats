@@ -338,7 +338,11 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                 if ("bot".equals(type) && !view.bot()) {
                     continue;
                 }
-                if (!keyword.isEmpty() && !matches(view, keyword)) {
+                java.util.Set<String> matchedByChat = keyword.isEmpty()
+                    ? java.util.Set.<String>of() : chatService.keysMatching(keyword);
+                if (!keyword.isEmpty()
+                    && !matches(view, keyword)
+                    && !matchedByChat.contains(view.name())) {
                     continue;
                 }
                 views.add(view);

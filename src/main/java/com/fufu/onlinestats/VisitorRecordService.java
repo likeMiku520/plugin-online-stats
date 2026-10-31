@@ -331,40 +331,40 @@ public class VisitorRecordService {
 
     private synchronized boolean save(VisitorRecord record, boolean isNew) {
         String name = record.getMetadata().getName();
-        try {
-            VisitorRecord result;
-            if (isNew) {
-                result = client.create(record).block(Duration.ofSeconds(10));
-            } else {
-                result = client.update(record).block(Duration.ofSeconds(10));
-            }
-            index.put(name, result != null ? result : record);
-            saveSuccess.incrementAndGet();
-            return true;
-        } catch (Exception e) {
-            if (!isNew) {
-                saveFailure.incrementAndGet();
-                recordError(e);
-                log.warn("Failed to update visitor record {}", name, e);
-                return false;
+        if (isNew) {
+            try {
+                VisitorRecord result = client.create(record).block(Duration.ofSeconds(10));
+                index.put(name, result != null ? result : record);
+                saveSuccess.incrementAndGet();
+                return true;
+            } catch (Exception e) {
+                // The name may already exist (a cleared visitor came back); the retry
+                // below updates it instead.
+                log.debug("Create failed for {}, trying an update", name, e);
             }
         }
         try {
             VisitorRecord existing = client.fetch(VisitorRecord.class, name)
                 .block(Duration.ofSeconds(5));
             if (existing == null) {
-                saveFailure.incrementAndGet();
-                return false;
+                /* The record is gone because an administrator cleared it while this
+                 * device was still online. Writing a fresh one is the right answer, not
+                 * an error: the visitor is simply counted again from now on. */
+                record.getMetadata().setVersion(null);
+                VisitorRecord created = client.create(record).block(Duration.ofSeconds(10));
+                index.put(name, created != null ? created : record);
+                saveSuccess.incrementAndGet();
+                return true;
             }
             record.getMetadata().setVersion(existing.getMetadata().getVersion());
             VisitorRecord result = client.update(record).block(Duration.ofSeconds(10));
             index.put(name, result != null ? result : record);
             saveSuccess.incrementAndGet();
             return true;
-        } catch (Exception second) {
+        } catch (Exception e) {
             saveFailure.incrementAndGet();
-            recordError(second);
-            log.warn("Failed to save visitor record {}", name, second);
+            recordError(e);
+            log.warn("Failed to save visitor record {}", name, e);
             return false;
         }
     }

@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -215,14 +216,19 @@ public class ChatMessageService {
         Deque<ChatEntry> thread = conversations.get(key);
         if (thread != null && !thread.isEmpty()) {
             ChatEntry first = thread.peekFirst();
-            if (first != null && "admin".equals(first.direction())) {
-                if (text.equals(first.text())) {
+            if (first == null || !"admin".equals(first.direction())) {
+                /* A visitor who started talking before there was a greeting keeps the
+                 * conversation they began; nothing is inserted ahead of their own words. */
+                return null;
+            }
+            /* Compared against every message already there, not just the head. The head
+             * never changes once written, so comparing only it made the check fail on
+             * every heartbeat after an edit and the greeting piled up. One copy of the
+             * current wording is the contract. */
+            for (ChatEntry entry : thread) {
+                if ("admin".equals(entry.direction()) && text.equals(entry.text())) {
                     return null;
                 }
-            } else {
-                // A visitor who started talking before there was a greeting keeps the
-                // conversation they began; nothing is inserted ahead of their own words.
-                return null;
             }
         }
         return append(key, ip, "admin", text, authorName, authorAvatar, pageUrl, pageTitle);
@@ -236,6 +242,29 @@ public class ChatMessageService {
     /** Every conversation, used by the maintenance page to export and clear. */
     public List<Conversation> allConversations() {
         return conversations();
+    }
+
+    /**
+     * The devices whose conversation mentions a piece of text, so the visitor list can be
+     * searched by what was said as well as by address or page.
+     *
+     * @param needle already lower cased by the caller
+     */
+    public java.util.Set<String> keysMatching(String needle) {
+        java.util.Set<String> found = new java.util.HashSet<>();
+        if (needle == null || needle.isBlank()) {
+            return found;
+        }
+        for (Map.Entry<String, Deque<ChatEntry>> entry : conversations.entrySet()) {
+            for (ChatEntry message : entry.getValue()) {
+                String text = message.text();
+                if (text != null && text.toLowerCase(Locale.ROOT).contains(needle)) {
+                    found.add(entry.getKey());
+                    break;
+                }
+            }
+        }
+        return found;
     }
 
     /**

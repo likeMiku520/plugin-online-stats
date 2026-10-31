@@ -79,6 +79,9 @@ function conversations(unread: number) {
 beforeEach(() => {
   vi.clearAllMocks()
   mocked.get.mockImplementation((url: string) => {
+    if (url.includes('/records/')) {
+      return Promise.resolve({ data: { ...record(), name: 'v-1', ip: '10.0.0.9' } })
+    }
     if (url.includes('/records')) {
       return Promise.resolve({
         data: {
@@ -90,6 +93,32 @@ beforeEach(() => {
     }
     if (url.includes('/chat-conversations')) {
       return Promise.resolve(conversations(2))
+    }
+    if (url.includes('/maintenance/summary')) {
+      return Promise.resolve({
+        data: { visitors: 4, humans: 3, bots: 1, conversations: 2, messages: 9 },
+      })
+    }
+    if (url.includes('/maintenance/conversations')) {
+      return Promise.resolve({
+        data: {
+          items: [
+            {
+              visitorKey: 'v-1',
+              ip: '10.0.0.9',
+              location: '中国 江苏 南京',
+              online: true,
+              total: 3,
+              lastText: '在的',
+              lastAt: 2,
+            },
+          ],
+          total: 1,
+          page: 1,
+          size: 200,
+          totalPages: 1,
+        },
+      })
     }
     return Promise.resolve({ data: {} })
   })
@@ -300,5 +329,84 @@ describe('the visitor list', () => {
 
     const last = mocked.get.mock.calls.filter((call) => String(call[0]).includes('/records')).pop()
     expect(last?.[1]?.params?.page).toBe(5)
+  })
+  it('shows the conversation count and opens the full list in a window', async () => {
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('会话数')
+    expect(wrapper.text()).not.toContain('消息数')
+
+    await wrapper.find('.os-stat__open').trigger('click')
+    await flushPromises()
+
+    const win = wrapper.find('.os-chatwin')
+    expect(win.exists()).toBe(true)
+    expect(win.text()).toContain('9 条消息')
+    expect(win.text()).toContain('最后消息')
+    expect(win.text()).toContain('10.0.0.9')
+  })
+
+  it('opens a visitor from the conversation window', async () => {
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    await wrapper.find('.os-stat__open').trigger('click')
+    await flushPromises()
+    await wrapper.find('.os-chatwin__item').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.os-drawer-mask').exists()).toBe(true)
+  })
+
+  it('searches inside the conversation window', async () => {
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    await wrapper.find('.os-stat__open').trigger('click')
+    await flushPromises()
+    await wrapper.find('.os-chatwin__search input').setValue('找不到的词')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('没有匹配的对话')
+  })
+
+  it('lets several visitors be selected before exporting them', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    expect(wrapper.find('.os-table__check').exists()).toBe(true)
+
+
+    await wrapper.find('.os-table__check input').setValue(true)
+    await flushPromises()
+
+    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('导出选中'))
+    await exportBtn!.trigger('click')
+
+    expect(window.open).toHaveBeenCalledWith(expect.stringContaining('keys=v-1'), '_blank')
+  })
+
+  it('clears only what was selected, and only after asking', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    mocked.post.mockResolvedValue({ data: { ok: true, visitors: 1, messages: 3 } })
+    const wrapper = mount(OnlineStatsPage)
+    await flushPromises()
+
+    await wrapper.find('.os-table__check input').setValue(true)
+    await flushPromises()
+
+    const clearBtn = wrapper.findAll('button').find((b) => b.text().includes('清除选中'))
+    await clearBtn!.trigger('click')
+    await flushPromises()
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(mocked.post).toHaveBeenCalledWith(expect.stringContaining('/maintenance/clear'), {
+      what: 'visitors',
+      all: false,
+      keys: ['v-1'],
+    })
   })
 })

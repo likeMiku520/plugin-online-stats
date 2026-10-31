@@ -18,6 +18,23 @@ interface UnreadItem {
   lastAt: number
 }
 
+interface ConversationItem {
+  visitorKey: string
+  ip: string | null
+  location: string | null
+  online: boolean
+  bot: boolean
+  userAgent: string | null
+  pageTitle: string | null
+  pageUrl: string | null
+  firstSeenAt: number
+  lastSeenAt: number
+  visitCount: number
+  total: number
+  lastText: string
+  lastAt: number
+}
+
 interface Stats {
   online: number
   onlineHumans?: number
@@ -45,14 +62,31 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(20)
 const loading = ref(true)
-const announceNote = ref('')
-const announceEnabled = ref(false)
-const testing = ref(false)
 const keyword = ref('')
 const status = ref<'all' | 'online' | 'offline'>('all')
 const visitorType = ref<'human' | 'bot' | 'all'>('human')
 const sort = ref<'lastSeenAt' | 'firstSeenAt' | 'visits'>('lastSeenAt')
 const jumpTo = ref<string>('')
+const multiSelect = ref(true)
+const selected = ref<string[]>([])
+const busy = ref(false)
+const manageNote = ref('')
+const chatPanelOpen = ref(false)
+const chatWindowOpen = ref(false)
+const chatKeyword = ref('')
+const filteredConversations = computed(() => {
+  const term = chatKeyword.value.trim().toLowerCase()
+  if (!term) {
+    return conversations.value
+  }
+  return conversations.value.filter((item) =>
+    [item.ip, item.location, item.lastText]
+      .filter(Boolean)
+      .some((field) => String(field).toLowerCase().includes(term)),
+  )
+})
+const conversations = ref<ConversationItem[]>([])
+const chatStats = ref({ conversations: 0, messages: 0 })
 const stats = ref<Stats>({
   online: 0,
   total: 0,
@@ -170,36 +204,7 @@ async function openUnread(entry: UnreadItem) {
   }
 }
 
-/** Sends the configured greeting to the first listed visitor, so the wording can be checked. */
-async function testAnnounce() {
-  const target = items.value[0]
-  if (!target) {
-    announceNote.value = '列表里还没有访客，等有人访问后再试。'
-    return
-  }
-  testing.value = true
-  announceNote.value = ''
-  try {
-    const { data } = await axios.post(`${api}/maintenance/announce-test`, {
-      key: target.name,
-    })
-    announceNote.value = `已发给 ${target.ip ?? '这位访客'}，内容为：${data.text}`
-  } catch (e: any) {
-    announceNote.value = e?.response?.data?.error ?? '发送失败，请稍后再试。'
-  } finally {
-    testing.value = false
-  }
-}
 
-/** Tells the page whether the greeting is switched on, so the test button can hide. */
-async function loadAnnounceState() {
-  try {
-    const { data } = await axios.get(`${api}/maintenance/announce-enabled`)
-    announceEnabled.value = Boolean(data.chatAnnounceEnabled)
-  } catch (e) {
-    announceEnabled.value = false
-  }
-}
 
 async function load() {
   loading.value = true
@@ -328,6 +333,184 @@ function closeDetail() {
   detail.value = null
 }
 
+const selectedCount = computed(() => selected.value.length)
+
+function toggleRow(key: string) {
+  const at = selected.value.indexOf(key)
+  if (at >= 0) {
+    selected.value.splice(at, 1)
+  } else {
+    selected.value.push(key)
+  }
+}
+
+function toggleAllOnPage() {
+  const keys = items.value.map((item) => item.name)
+  const allOn = keys.length > 0 && keys.every((key) => selected.value.includes(key))
+  if (allOn) {
+    selected.value = selected.value.filter((key) => !keys.includes(key))
+  } else {
+    for (const key of keys) {
+      if (!selected.value.includes(key)) {
+        selected.value.push(key)
+      }
+    }
+  }
+}
+
+/**
+ * One conversation, opened in the same panel the 更多 button uses.
+ *
+ * <p>A conversation can outlive the visitor record it belongs to — a record is cleared
+ * while this window is open, or it aged out — so a missing record falls back to what the
+ * conversation itself knows instead of refusing to open.</p>
+ */
+async function openConversation(key: string) {
+  const row = conversations.value.find((item) => item.visitorKey === key)
+  try {
+    const { data } = await axios.get<RecordView>(`${api}/records/${key}`)
+    detail.value = data
+  } catch (e: any) {
+    if (e?.response?.status === 404 && row) {
+      detail.value = {
+        name: key,
+        ip: row.ip,
+        location: row.location,
+        country: null,
+        countryCode: null,
+        region: null,
+        city: null,
+        districts: null,
+        isp: null,
+        net: null,
+        idc: null,
+        zipcode: null,
+        areacode: null,
+        protocol: null,
+        dec: null,
+        geoResolvedAt: null,
+        userAgent: row.userAgent,
+        ua: {} as UaInfo,
+        bot: row.bot,
+        botReason: null,
+        firstPageUrl: null,
+        firstPageTitle: null,
+        pageUrl: row.pageUrl,
+        pageTitle: row.pageTitle,
+        referer: null,
+        firstReferer: null,
+        firstSeenAt: row.firstSeenAt,
+        lastSeenAt: row.lastSeenAt,
+        visitCount: row.visitCount,
+        pageViewCount: 0,
+        totalOnlineMs: 0,
+        screen: null,
+        viewport: null,
+        timezone: null,
+        language: null,
+        platform: null,
+        cpuCores: null,
+        deviceMemory: null,
+        connection: null,
+        online: row.online,
+      } as RecordView
+      manageNote.value = ''
+      return
+    }
+    manageNote.value = '打不开这位访客的详情。'
+  }
+}
+
+async function loadChatStats() {
+  try {
+    const { data } = await axios.get(`${api}/maintenance/summary`)
+    chatStats.value = {
+      conversations: data.conversations ?? 0,
+      messages: data.messages ?? 0,
+    }
+  } catch (e) {
+    /* the counters are optional */
+  }
+  if (!chatWindowOpen.value) {
+    return
+  }
+  try {
+    const { data } = await axios.get(`${api}/maintenance/conversations`, {
+      params: { page: 1, size: 200 },
+    })
+    conversations.value = data.items ?? []
+  } catch (e) {
+    conversations.value = []
+  }
+}
+
+watch(chatWindowOpen, (open) => {
+  if (open) {
+    loadChatStats()
+  }
+})
+
+function openChatWindow() {
+  chatKeyword.value = ''
+  chatWindowOpen.value = true
+}
+
+function download(url: string, params: Record<string, string>) {
+  const search = new window.URLSearchParams(params).toString()
+  window.open(`${api}${url}${search ? `?${search}` : ''}`, '_blank')
+}
+
+/** Exports the rows that match the current filter, or everything. */
+function exportVisitors(all: boolean) {
+  const params: Record<string, string> = {
+    type: visitorType.value,
+    sort: sort.value,
+    keyword: keyword.value.trim(),
+  }
+  if (!all) {
+    if (!selectedCount.value) {
+      manageNote.value = '先勾选要导出的访客。'
+      return
+    }
+    params.keys = selected.value.join(',')
+  }
+  download('/maintenance/visitors/export', params)
+}
+
+function exportChat(all: boolean) {
+  if (!all && !selectedCount.value) {
+    manageNote.value = '先勾选要导出的访客。'
+    return
+  }
+  download('/maintenance/chat/export', all ? {} : { keys: selected.value.join(',') })
+}
+
+async function clearData(what: 'visitors' | 'chat', all: boolean) {
+  const keys = all ? [] : [...selected.value]
+  if (!all && !keys.length) {
+    manageNote.value = '先勾选要清除的访客。'
+    return
+  }
+  const label = what === 'chat' ? '聊天记录' : '访客数据'
+  const who = all ? '全部访客' : `选中的 ${keys.length} 位访客`
+  if (!window.confirm(`确定要清除${who}的${label}吗？删除后无法恢复。`)) {
+    return
+  }
+  busy.value = true
+  try {
+    const { data } = await axios.post(`${api}/maintenance/clear`, { what, all, keys })
+    manageNote.value =
+      `已清除 ${data.visitors} 条访客数据、${data.messages} 条聊天记录。`
+    selected.value = []
+    detail.value = null
+    await Promise.all([refresh(), loadChatStats()])
+  } catch (e: any) {
+    manageNote.value = e?.response?.data?.error ?? '清除失败，请稍后再试。'
+  } finally {
+    busy.value = false
+  }
+}
+
 function pad(value: number): string {
   return String(value).padStart(2, '0')
 }
@@ -384,13 +567,13 @@ function deviceSummary(item: RecordView): string {
 function refresh() {
   load()
   loadUnread()
+  loadChatStats()
 }
 
 watch([page, size], () => load())
 
 onMounted(() => {
   refresh()
-  loadAnnounceState()
   pollTimer = window.setInterval(refresh, 3_000)
 })
 
@@ -414,20 +597,7 @@ onUnmounted(() => {
           <code>/apis/online-stats.halo.run/v1alpha1/online-count</code> 获取。
         </p>
       </div>
-      <div class="os-page__actions">
-        <button
-          v-if="announceEnabled"
-          class="os-toolbar__refresh"
-          type="button"
-          :disabled="testing"
-          @click="testAnnounce"
-        >
-          {{ testing ? '发送中…' : '自动访客消息测试' }}
-        </button>
-      </div>
     </div>
-
-    <div v-if="announceNote" class="os-page__note">{{ announceNote }}</div>
 
     <div class="os-page__stats">
       <div class="os-stat">
@@ -454,6 +624,139 @@ onUnmounted(() => {
           <span class="os-stat__part os-stat__part--bot">机器人 {{ stats.todayBots ?? 0 }}</span>
         </span>
       </div>
+      <div class="os-stat os-stat--conv">
+        <span class="os-stat__label">会话数</span>
+        <span class="os-stat__value">{{ chatStats.conversations }}</span>
+        <span class="os-stat__split">
+          <span class="os-stat__part">点击右侧按钮查看全部对话</span>
+        </span>
+        <button
+          class="os-stat__open"
+          type="button"
+          title="查看全部对话"
+          aria-label="查看全部对话"
+          @click="openChatWindow"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="currentColor" d="M21 6v2H3V6zM3 18h9v-2H3zm0-5h18v-2H3z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div v-if="chatWindowOpen" class="os-chatwin" @click.self="chatWindowOpen = false">
+      <div class="os-chatwin__panel">
+        <div class="os-chatwin__head">
+          <strong>全部对话</strong>
+          <span class="os-chatwin__stat">{{ conversations.length }} 位访客</span>
+          <span class="os-chatwin__stat">{{ chatStats.messages }} 条消息</span>
+          <button class="os-chatwin__close" type="button" @click="chatWindowOpen = false">
+            关闭
+          </button>
+        </div>
+        <div class="os-chatwin__search">
+          <input
+            v-model="chatKeyword"
+            type="search"
+            placeholder="搜索聊天记录"
+            aria-label="搜索聊天记录"
+          />
+        </div>
+        <div class="os-chatwin__body">
+          <button
+            v-for="item in filteredConversations"
+            :key="item.visitorKey"
+            class="os-chatwin__item"
+            type="button"
+            @click="openConversation(item.visitorKey)"
+          >
+            <span class="os-dot" :class="{ 'os-dot--online': item.online }" />
+            <span class="os-chatwin__who">
+              <span class="os-chatwin__ip">{{ item.ip || item.visitorKey }}</span>
+              <span class="os-chatwin__loc">{{ item.location || '未知属地' }}</span>
+            </span>
+            <span class="os-chatwin__msg">
+              <span class="os-chatwin__msg-label">最后消息</span>
+              <span class="os-chatwin__msg-text">{{ item.lastText }}</span>
+            </span>
+            <span class="os-chatwin__total">{{ item.total }} 条</span>
+          </button>
+          <p v-if="!filteredConversations.length" class="os-chatwin__empty">没有匹配的对话。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="os-manage">
+      <p class="os-manage__hint">已选 {{ selectedCount }} 位访客</p>
+
+      <div class="os-manage__cols">
+      <div class="os-manage__group">
+        <span class="os-manage__label">访客数据</span>
+        <div class="os-manage__row">
+          <button
+            class="os-toolbar__refresh"
+            type="button"
+            :disabled="!selectedCount"
+            @click="exportVisitors(false)"
+          >
+            导出选中
+          </button>
+          <button class="os-toolbar__refresh" type="button" @click="exportVisitors(true)">
+            导出全部
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy || !selectedCount"
+            @click="clearData('visitors', false)"
+          >
+            清除选中
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy"
+            @click="clearData('visitors', true)"
+          >
+            清除全部
+          </button>
+        </div>
+      </div>
+
+      <div class="os-manage__group">
+        <span class="os-manage__label">聊天记录</span>
+        <div class="os-manage__row">
+          <button
+            class="os-toolbar__refresh"
+            type="button"
+            :disabled="!selectedCount"
+            @click="exportChat(false)"
+          >
+            导出选中
+          </button>
+          <button class="os-toolbar__refresh" type="button" @click="exportChat(true)">
+            导出全部
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy || !selectedCount"
+            @click="clearData('chat', false)"
+          >
+            清除选中
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy"
+            @click="clearData('chat', true)"
+          >
+            清除全部
+          </button>
+        </div>
+      </div>
+      </div>
+      <p v-if="manageNote" class="os-manage__note">{{ manageNote }}</p>
     </div>
 
     <div v-if="stats.lastError" class="os-alert">
@@ -594,6 +897,14 @@ onUnmounted(() => {
       <table v-else class="os-table">
         <thead>
           <tr>
+            <th v-if="multiSelect" class="os-table__check">
+              <input
+                type="checkbox"
+                :aria-label="`全选本页`"
+                :checked="items.length > 0 && items.every((item) => selected.includes(item.name))"
+                @change="toggleAllOnPage"
+              />
+            </th>
             <th>访客</th>
             <th>设备</th>
             <th>当前页面</th>
@@ -604,6 +915,14 @@ onUnmounted(() => {
         </thead>
         <tbody>
           <tr v-for="item in items" :key="item.name">
+            <td v-if="multiSelect" class="os-table__check" @click.stop>
+              <input
+                type="checkbox"
+                :aria-label="`选择 ${item.ip || item.name}`"
+                :checked="selected.includes(item.name)"
+                @change="toggleRow(item.name)"
+              />
+            </td>
             <td>
               <div class="os-visitor">
                 <span class="os-dot" :class="{ 'os-dot--online': item.online }" />
@@ -900,9 +1219,34 @@ onUnmounted(() => {
     border: 1px solid #B9E7E3;
     border-radius: 0.375rem;
 
-    &:hover {
+    &:hover:not(:disabled) {
       background: #B9E7E3;
     }
+
+    &:disabled {
+      color: #d1a3a3;
+      cursor: not-allowed;
+      background: #fdf2f2;
+      border-color: #f5d0d0;
+    }
+  }
+}
+
+/* Clearing is destructive, so those buttons are red whether or not they can be used. */
+.os-toolbar__refresh--danger {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-color: #fecaca;
+
+  &:hover:not(:disabled) {
+    background: #fee2e2;
+  }
+
+  &:disabled {
+    color: #d8a3a3;
+    cursor: not-allowed;
+    background: #fdf6f6;
+    border-color: #f6dede;
   }
 }
 
@@ -1218,6 +1562,255 @@ onUnmounted(() => {
   background: #E8F9F7;
   border: 1px solid #B9E7E3;
   border-radius: 0.25rem;
+}
+
+.os-stat--conv {
+  position: relative;
+}
+
+.os-stat__open {
+  position: absolute;
+  right: 0.625rem;
+  bottom: 0.625rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  color: #39c5bb;
+  cursor: pointer;
+  background: #e8f9f7;
+  border: 1px solid #b9e7e3;
+  border-radius: 0.375rem;
+
+  &:hover {
+    background: #b9e7e3;
+  }
+}
+
+.os-icon-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.125rem;
+  height: 2.125rem;
+  color: #6b7280;
+  cursor: pointer;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.375rem;
+
+  &:hover {
+    color: #39c5bb;
+    border-color: #b9e7e3;
+  }
+
+  &.is-on {
+    color: #fff;
+    background: #39c5bb;
+    border-color: #39c5bb;
+  }
+
+  &__badge {
+    position: absolute;
+    top: -0.375rem;
+    right: -0.375rem;
+    min-width: 1rem;
+    padding: 0 0.25rem;
+    font-size: 0.625rem;
+    line-height: 1rem;
+    color: #fff;
+    text-align: center;
+    background: #ef4444;
+    border-radius: 9999px;
+  }
+}
+
+.os-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: #fff;
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+
+  &__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  &__cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    gap: 0.75rem 1.25rem;
+  }
+
+  &__group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    padding-top: 0.5rem;
+    border-top: 1px dashed #f3f4f6;
+  }
+
+  &__label {
+    flex: none;
+    width: 4rem;
+    font-size: 0.75rem;
+    color: #9ca3af;
+  }
+
+  &__hint {
+    font-size: 0.75rem;
+    color: #167a72;
+  }
+
+  &__note {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #167a72;
+  }
+}
+
+.os-chatwin {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(17 24 39 / 0.35);
+
+  &__panel {
+    display: flex;
+    flex-direction: column;
+    width: min(38rem, 92vw);
+    max-height: 78vh;
+    background: #fff;
+    border-radius: 0.75rem;
+    box-shadow: 0 20px 40px -12px rgb(0 0 0 / 0.35);
+  }
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #f3f4f6;
+  }
+
+  &__stat {
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  &__close {
+    margin-left: auto;
+    padding: 0.25rem 0.625rem;
+    font-size: 0.8125rem;
+    color: #4b5563;
+    cursor: pointer;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.375rem;
+  }
+
+  &__search {
+    padding: 0.625rem 1rem;
+    border-bottom: 1px solid #f3f4f6;
+
+    input {
+      width: 100%;
+      padding: 0.375rem 0.625rem;
+      font-size: 0.8125rem;
+      border: 1px solid #e5e7eb;
+      border-radius: 0.375rem;
+      outline: none;
+
+      &:focus {
+        border-color: #8addd6;
+      }
+    }
+  }
+
+  &__body {
+    overflow-y: auto;
+  }
+
+  &__item {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    width: 100%;
+    padding: 0.5rem 1rem;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #f9fafb;
+
+    &:hover {
+      background: #f9fafb;
+    }
+  }
+
+  &__who {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: 9rem;
+  }
+
+  &__ip {
+    font-weight: 600;
+    color: #111827;
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__loc {
+    font-size: 0.6875rem;
+    color: #6b7280;
+  }
+
+  &__msg {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  &__msg-label {
+    font-size: 0.625rem;
+    color: #9ca3af;
+  }
+
+  &__msg-text {
+    overflow: hidden;
+    color: #4b5563;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  &__total {
+    flex: none;
+    font-size: 0.75rem;
+    color: #39c5bb;
+  }
+
+  &__empty {
+    padding: 2rem 0;
+    font-size: 0.8125rem;
+    color: #9ca3af;
+    text-align: center;
+  }
 }
 
 .os-pager {

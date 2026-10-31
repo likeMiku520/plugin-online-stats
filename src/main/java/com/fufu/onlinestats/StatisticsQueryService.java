@@ -266,59 +266,17 @@ public class StatisticsQueryService {
     }
 
     /**
-     * Source totals for one kind of visitor. The stored maps are plain counters, so a
-     * filtered view groups the retained visitor records instead: a device keeps the
-     * same browser, system and first referrer, which makes its page views attributable.
+     * Source totals for one kind of visitor.
+     *
+     * <p>Every scope goes through the same computation, which is what makes the three
+     * filters add up. Before, the unfiltered view read the per-day counters while a
+     * filtered one grouped the retained visitor records; the two count different things
+     * over different periods, so "全部" never equalled "真人 + 机器人".</p>
      */
     public Map<String, Object> sources(OnlineStatsSettings settings, int days,
                                        String dimension, String from, String to,
                                        Scope scope) {
-        if (scope.filtered()) {
-            return sourcesFromRecords(settings, days, dimension, from, to, scope);
-        }
-        List<DailyStat> window = window(days, from, to);
-        Map<String, Long> views = new LinkedHashMap<>();
-        Map<String, List<String>> visitors = new LinkedHashMap<>();
-        for (DailyStat day : window) {
-            Map<String, Long> map = switch (dimension) {
-                case "system" -> day.getSpec().getSystems();
-                case "referer" -> day.getSpec().getReferrers();
-                case "country" -> day.getSpec().getCountries();
-                default -> day.getSpec().getBrowsers();
-            };
-            map.forEach((key, value) -> {
-                if ("referer".equals(dimension) && isSelfReferer(key, settings)) {
-                    return;
-                }
-                views.merge(key, value, Long::sum);
-                List<String> keys = visitors.computeIfAbsent(key, k -> new ArrayList<>());
-                List<String> tracked = day.getSpec().getSourceVisitors()
-                    .get(dimensionKey(dimension, key));
-                if (tracked != null) {
-                    for (String visitorKey : tracked) {
-                        if (!keys.contains(visitorKey)) {
-                            keys.add(visitorKey);
-                        }
-                    }
-                }
-            });
-        }
-        List<Map<String, Object>> items = new ArrayList<>();
-        views.entrySet().stream()
-            .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-            .forEach(entry -> {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("name", entry.getKey());
-                item.put("views", entry.getValue());
-                item.put("visitors", (long) visitors.getOrDefault(entry.getKey(), List.of()).size());
-                items.add(item);
-            });
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dimension", dimension);
-        result.put("items", items);
-        result.put("totalViews", items.stream()
-            .mapToLong(item -> ((Number) item.get("views")).longValue()).sum());
-        return result;
+        return sourcesFromRecords(settings, days, dimension, from, to, scope);
     }
 
     public List<Map<String, Object>> articleList(OnlineStatsSettings settings, String sort,
@@ -335,7 +293,6 @@ public class StatisticsQueryService {
     private Map<String, Object> sourcesFromRecords(OnlineStatsSettings settings, int days,
                                                    String dimension, String from, String to,
                                                    Scope scope) {
-        boolean wantBots = scope == Scope.BOT;
         long fromMs = windowStartMillis(days, from);
         long toMs = windowEndMillis(to);
         Map<String, Long> views = new LinkedHashMap<>();
@@ -344,8 +301,12 @@ public class StatisticsQueryService {
             if (record.getSpec() == null || record.getMetadata() == null) {
                 continue;
             }
-            boolean bot = Boolean.TRUE.equals(record.getSpec().getBot());
-            if (bot != wantBots) {
+            boolean bot = isBot(record.getSpec());
+            // The same classification the visitor list shows, so the three filters agree.
+            if (scope == Scope.BOT && !bot) {
+                continue;
+            }
+            if (scope == Scope.HUMAN && bot) {
                 continue;
             }
             Long lastSeen = record.getSpec().getLastSeenAt();
@@ -691,7 +652,7 @@ public class StatisticsQueryService {
      * so it is hidden from the source list when the domain is known.
      */
     private static boolean isSelfReferer(String value, OnlineStatsSettings settings) {
-        if (value == null || value.isBlank()) {
+        if (value == null || value.isBlank() || settings == null) {
             return false;
         }
         String configured = settings.siteHomepageOrDefault();

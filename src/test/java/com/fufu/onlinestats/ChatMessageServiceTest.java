@@ -269,6 +269,33 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void aGreetingIsNotRepeatedByEveryHeartbeat() {
+        ChatMessageService service = service();
+        service.announce(KEY, "10.0.0.1", "欢迎", "访客消息", null, "/", "首页");
+        // A page reports every few seconds; none of those may write a second copy.
+        for (int i = 0; i < 20; i++) {
+            service.announce(KEY, "10.0.0.1", "欢迎", "访客消息", null, "/", "首页");
+        }
+
+        assertEquals(1, service.thread(KEY).size(),
+            "one copy of the current wording, however often it is asked for");
+    }
+
+    @Test
+    void editingTwiceLeavesOneCopyOfTheNewestWording() {
+        ChatMessageService service = service();
+        service.announce(KEY, "10.0.0.1", "第一版", "访客消息", null, "/", "首页");
+        service.announce(KEY, "10.0.0.1", "第二版", "访客消息", null, "/", "首页");
+        for (int i = 0; i < 10; i++) {
+            service.announce(KEY, "10.0.0.1", "第二版", "访客消息", null, "/", "首页");
+        }
+
+        List<ChatMessageService.ChatEntry> thread = service.thread(KEY);
+        assertEquals(2, thread.size(), "only the edit adds a message");
+        assertEquals("第二版", thread.get(thread.size() - 1).text());
+    }
+
+    @Test
     void anEditedGreetingReachesADeviceThatAlreadyHasOne() {
         ChatMessageService service = service();
         service.announce(KEY, "10.0.0.1", "第一版内容", "访客消息", null, "/", "首页");

@@ -97,6 +97,94 @@ public class StatsAggregationService {
         return new ArrayList<>(dailyIndex.values());
     }
 
+    /**
+     * Takes one device out of the stored totals, so a cleared visitor stops being counted
+     * on the statistics page as well as the list.
+     *
+     * <p>Both kinds of statistic keep a per-device breakdown, which is what makes this
+     * exact: the device's own contribution is subtracted and the totals are taken from
+     * what is left. Only days and articles the device actually contributed to are
+     * touched.</p>
+     *
+     * @return how many stored statistics were adjusted
+     */
+    public int forgetVisitor(String visitorKey) {
+        if (visitorKey == null || visitorKey.isBlank()) {
+            return 0;
+        }
+        int touched = 0;
+        for (DailyStat day : new ArrayList<>(dailyIndex.values())) {
+            if (subtractVisitor(day.getSpec(), visitorKey) && updateQuietly(day)) {
+                touched++;
+            }
+        }
+        for (ArticleStat article : new ArrayList<>(articleIndex.values())) {
+            if (subtractVisitor(article.getSpec(), visitorKey) && updateQuietly(article)) {
+                touched++;
+            }
+        }
+        if (touched > 0) {
+            log.debug("Removed {} from {} stored statistics", visitorKey, touched);
+        }
+        return touched;
+    }
+
+    private boolean updateQuietly(run.halo.app.extension.Extension extension) {
+        try {
+            client.update(extension).block(java.time.Duration.ofSeconds(10));
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to adjust a statistic after a visitor was cleared", e);
+            return false;
+        }
+    }
+
+    private static long nvl(Long value) {
+        return value == null ? 0L : value;
+    }
+
+    /**
+     * Removes one device from a daily total.
+     *
+     * @return true when this day actually counted the device
+     */
+    static boolean subtractVisitor(DailyStat.Spec spec, String visitorKey) {
+        if (spec == null || spec.getVisitorViews() == null
+            || !spec.getVisitorViews().containsKey(visitorKey)) {
+            return false;
+        }
+        Long views = spec.getVisitorViews().remove(visitorKey);
+        spec.getVisitorIps().remove(visitorKey);
+        if (views != null) {
+            spec.setViews(Math.max(0L, nvl(spec.getViews()) - views));
+        }
+        spec.setVisitors((long) spec.getVisitorViews().size());
+        return true;
+    }
+
+    /**
+     * Removes one device from an article total, which keeps its own per-device numbers.
+     *
+     * @return true when this article actually counted the device
+     */
+    static boolean subtractVisitor(ArticleStat.Spec spec, String visitorKey) {
+        if (spec == null || spec.getVisitorViews() == null
+            || !spec.getVisitorViews().containsKey(visitorKey)) {
+            return false;
+        }
+        Long views = spec.getVisitorViews().remove(visitorKey);
+        Long duration = spec.getVisitorDurations().remove(visitorKey);
+        spec.getVisitorLastSeen().remove(visitorKey);
+        if (views != null) {
+            spec.setViews(Math.max(0L, nvl(spec.getViews()) - views));
+        }
+        if (duration != null) {
+            spec.setTotalOnlineMs(Math.max(0L, nvl(spec.getTotalOnlineMs()) - duration));
+        }
+        spec.setVisitors((long) spec.getVisitorViews().size());
+        return true;
+    }
+
     public DailyStat day(String date) {
         return dailyIndex.get(date);
     }
@@ -657,10 +745,6 @@ public class StatsAggregationService {
     public void shutdown() {
         recordExecutor.shutdownNow();
         clear();
-    }
-
-    private static long nvl(Long value) {
-        return value == null ? 0L : value;
     }
 
     /**

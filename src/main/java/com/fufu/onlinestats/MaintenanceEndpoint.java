@@ -48,17 +48,20 @@ public class MaintenanceEndpoint implements CustomEndpoint {
     private final ChatMessageService chatService;
     private final LiveSettings liveSettings;
     private final OnlineVisitorRegistry registry;
+    private final StatsAggregationService statsService;
     private final String configMapName;
 
     public MaintenanceEndpoint(VisitorRecordService recordService,
                                ChatMessageService chatService,
                                LiveSettings liveSettings,
                                OnlineVisitorRegistry registry,
+                               StatsAggregationService statsService,
                                PluginContext pluginContext) {
         this.recordService = recordService;
         this.chatService = chatService;
         this.liveSettings = liveSettings;
         this.registry = registry;
+        this.statsService = statsService;
         this.configMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
@@ -78,9 +81,6 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             .GET("/maintenance/visitors/export", this::exportVisitors)
             .GET("/maintenance/chat/export", this::exportChat)
             .POST("/maintenance/clear", this::clear)
-            .GET("/maintenance/announce-enabled", accept(MediaType.APPLICATION_JSON),
-                this::announceEnabled)
-            .POST("/maintenance/announce-test", this::announceTest)
             .build();
     }
 
@@ -192,6 +192,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
     }
 
     private List<Map<String, Object>> filteredVisitors(Filter filter) {
+        Map<String, Boolean> online = onlineLookup();
         List<Map<String, Object>> rows = new ArrayList<>();
         for (VisitorRecord record : recordService.list()) {
             VisitorRecord.Spec spec = record.getSpec();
@@ -199,6 +200,9 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                 continue;
             }
             boolean bot = StatisticsQueryService.isBot(spec);
+            if (!filter.picks(record.getMetadata().getName())) {
+                continue;
+            }
             if (!filter.accepts(bot, spec.getIp(), spec.getLocation(),
                 spec.getLastPageTitle(), spec.getUserAgent(), spec.getCity(), spec.getIsp())) {
                 continue;
@@ -211,7 +215,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             row.put("userAgent", spec.getUserAgent());
             row.put("bot", bot);
             // The light means "online", the same thing it means in the visitor list.
-            row.put("online", isOnline(record.getMetadata().getName()));
+            row.put("online", Boolean.TRUE.equals(online.get(record.getMetadata().getName())));
             row.put("firstSeenAt", spec.getFirstSeenAt());
             row.put("lastSeenAt", spec.getLastSeenAt());
             row.put("visitCount", spec.getVisitCount());
@@ -223,6 +227,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
     }
 
     private List<Map<String, Object>> filteredConversations(Filter filter) {
+        Map<String, Boolean> online = onlineLookup();
         List<Map<String, Object>> rows = new ArrayList<>();
         for (ChatMessageService.Conversation conversation : chatService.allConversations()) {
             String key = conversation.key();
@@ -231,6 +236,9 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             VisitorRecord.Spec spec = record == null ? null : record.getSpec();
             boolean bot = spec != null && StatisticsQueryService.isBot(spec);
             String ip = last == null ? null : last.ip();
+            if (!filter.picks(key)) {
+                continue;
+            }
             if (!filter.accepts(bot, ip,
                 spec == null ? null : spec.getLocation(),
                 spec == null ? null : spec.getLastPageTitle(),
@@ -243,7 +251,12 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             row.put("ip", ip);
             row.put("location", spec == null ? null : spec.getLocation());
             row.put("bot", bot);
-            row.put("online", isOnline(key));
+            row.put("online", Boolean.TRUE.equals(online.get(key)));
+            // Carried over from the visitor record, so the row can show the device.
+            row.put("userAgent", spec == null ? null : spec.getUserAgent());
+            row.put("pageTitle", spec == null ? null : spec.getLastPageTitle());
+            row.put("pageUrl", spec == null ? null : spec.getLastPageUrl());
+            row.put("idc", spec == null ? null : spec.getIdc());
             row.put("total", chatService.thread(key).size());
             row.put("lastText", last == null ? "" : last.text());
             row.put("lastAt", last == null ? 0L : last.sentAt());
@@ -276,13 +289,15 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             "text/csv; charset=utf-8");
     }
 
-    /** One conversation, or every conversation, as readable plain text. */
+    /** One conversation, several, or every conversation, as readable plain text. */
     private Mono<ServerResponse> exportChat(ServerRequest request) {
         String key = request.queryParam("key").orElse("").trim();
+        Filter filter = Filter.of(request);
         StringBuilder out = new StringBuilder();
         List<ChatMessageService.Conversation> chosen = new ArrayList<>();
         for (ChatMessageService.Conversation conversation : chatService.allConversations()) {
-            if (key.isEmpty() || key.equals(conversation.key())) {
+            boolean byKey = key.isEmpty() || key.equals(conversation.key());
+            if (byKey && filter.picks(conversation.key())) {
                 chosen.add(conversation);
             }
         }
@@ -358,10 +373,21 @@ public class MaintenanceEndpoint implements CustomEndpoint {
 
                 int visitors = 0;
                 int messages = 0;
+                int statistics = 0;
                 boolean wantsVisitors = "visitors".equals(what) || "both".equals(what);
-                boolean wantsChat = "chat".equals(what) || "both".equals(what);
+                // Clearing a visitor means everything about them, so their conversation
+                // goes too: leaving half of a person behind is what makes the two lists
+                // disagree later.
+                boolean wantsChat = "chat".equals(what) || "both".equals(what)
+                    || wantsVisitors;
+                List<String> removed = new ArrayList<>();
                 if (all) {
                     if (wantsVisitors) {
+                        removed.addAll(recordService.list().stream()
+                            .map(record -> record.getMetadata() == null ? null
+                                : record.getMetadata().getName())
+                            .filter(name -> name != null)
+                            .toList());
                         visitors = recordService.deleteAll();
                     }
                     if (wantsChat) {
@@ -371,13 +397,23 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                     for (String key : keys) {
                         if (wantsVisitors && recordService.deleteByKey(key)) {
                             visitors++;
+                            removed.add(key);
                         }
                         if (wantsChat) {
                             messages += chatService.clearConversation(key);
                         }
+                        if (wantsVisitors && !removed.contains(key)) {
+                            removed.add(key);
+                        }
                     }
                 }
-                log.info("Cleared {} visitor records and {} messages ({})", visitors, messages,
+                // The statistics page is built from its own counters, so a cleared device
+                // has to be taken out of those as well.
+                for (String key : removed) {
+                    statistics += statsService.forgetVisitor(key);
+                }
+                log.info("Cleared {} visitor records, {} messages and {} statistics ({})",
+                    visitors, messages, statistics,
                     all ? "everything" : keys.size() + " selected");
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("ok", true);
@@ -386,54 +422,6 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                 return ServerResponse.ok().bodyValue(payload);
             });
     }
-
-    /** Whether the test button should be offered at all. */
-    private Mono<ServerResponse> announceEnabled(ServerRequest request) {
-        Map<String, String> chat = liveSettings.greetingValues(configMapName);
-        String text = chat.get("chatAnnounceText");
-        String enabled = chat.get("chatAnnounceEnabled");
-        boolean on = "true".equalsIgnoreCase(enabled) && text != null && !text.isBlank();
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("chatAnnounceEnabled", on);
-        payload.put("hasText", text != null && !text.isBlank());
-        return ServerResponse.ok().bodyValue(payload);
-    }
-
-    /**
-     * Sends the greeting to one visitor on demand. Unlike the automatic send it works on a
-     * device that has already talked, because checking the wording is the whole point.
-     */
-    private Mono<ServerResponse> announceTest(ServerRequest request) {
-        return request.bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
-            })
-            .onErrorResume(e -> Mono.empty())
-            .defaultIfEmpty(Map.of())
-            .flatMap(body -> {
-                String key = body.get("key") == null ? "" : String.valueOf(body.get("key")).trim();
-                if (key.isEmpty()) {
-                    return ServerResponse.badRequest().bodyValue(Map.of("error", "缺少访客"));
-                }
-                // Read live, so the text that was just saved in the console is the one sent.
-                Map<String, String> chat = liveSettings.greetingValues(configMapName);
-                String text = chat.get("chatAnnounceText");
-                if (text == null || text.isBlank()) {
-                    return ServerResponse.badRequest()
-                        .bodyValue(Map.of("error", "还没有填写自动消息内容"));
-                }
-                VisitorRecord record = recordService.get(key);
-                String ip = record == null || record.getSpec() == null
-                    ? null : record.getSpec().getIp();
-                String name = chat.get("chatAnnounceName");
-                ChatMessageService.ChatEntry entry = chatService.append(key, ip, "admin", text,
-                    name == null || name.isBlank() ? "访客消息" : name, null, null, null);
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("ok", true);
-                payload.put("seq", entry.seq());
-                payload.put("text", text);
-                return ServerResponse.ok().bodyValue(payload);
-            });
-    }
-
     /** Whether that device is currently reporting a heartbeat. */
     private boolean isOnline(String key) {
         if (key == null) {
@@ -444,6 +432,40 @@ public class MaintenanceEndpoint implements CustomEndpoint {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    /**
+     * The set of devices that are actually online right now, worked out the same way the
+     * visitor list does it: a stored record counts while its last heartbeat is inside the
+     * online window, and anything currently in the registry counts too. Asking the
+     * registry alone made every device that had ever loaded the tracker look online.
+     */
+    private Map<String, Boolean> onlineLookup() {
+        long timeout = 60_000L;
+        try {
+            var settings = liveSettings.effectiveChatSettings(configMapName);
+            if (settings.isPresent()) {
+                timeout = settings.get().onlineTimeoutMillis();
+            }
+        } catch (Exception e) {
+            log.debug("Could not read the online timeout, using a minute", e);
+        }
+        long cutoff = System.currentTimeMillis() - timeout;
+        Map<String, Boolean> online = new LinkedHashMap<>();
+        for (VisitorRecord record : recordService.list()) {
+            String name = record.getMetadata() == null ? null : record.getMetadata().getName();
+            if (name == null || record.getSpec() == null) {
+                continue;
+            }
+            Long lastSeen = record.getSpec().getLastSeenAt();
+            online.put(name, lastSeen != null && lastSeen >= cutoff);
+        }
+        // The registry keeps a visitor until something asks it to expire entries, so it
+        // is asked for the current window before its contents are trusted.
+        for (var visitor : registry.list(timeout)) {
+            online.put(visitor.getKey(), true);
+        }
+        return online;
     }
 
     private static int intParam(ServerRequest request, String name, int fallback) {
@@ -478,19 +500,41 @@ public class MaintenanceEndpoint implements CustomEndpoint {
         private final String type;
         private final String sort;
         private final String keyword;
+        /** When set, only these devices are included; empty means every one of them. */
+        private final java.util.Set<String> keys;
 
         Filter(String type, String sort, String keyword) {
+            this(type, sort, keyword, java.util.Set.of());
+        }
+
+        Filter(String type, String sort, String keyword, java.util.Set<String> keys) {
             this.type = type;
             this.sort = sort;
             // Normalised here so a caller cannot forget it; matching ignores case.
             this.keyword = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
+            this.keys = keys == null ? java.util.Set.of() : keys;
         }
 
         static Filter of(ServerRequest request) {
+            String raw = request.queryParam("keys").orElse("").trim();
+            java.util.Set<String> keys = new java.util.LinkedHashSet<>();
+            if (!raw.isEmpty()) {
+                for (String part : raw.split(",")) {
+                    if (!part.isBlank()) {
+                        keys.add(part.trim());
+                    }
+                }
+            }
             return new Filter(
                 request.queryParam("type").orElse("all"),
                 request.queryParam("sort").orElse("lastSeenAt"),
-                request.queryParam("keyword").orElse(""));
+                request.queryParam("keyword").orElse(""),
+                keys);
+        }
+
+        /** Whether a device is inside the chosen selection. */
+        boolean picks(String key) {
+            return keys.isEmpty() || (key != null && keys.contains(key));
         }
 
         boolean accepts(boolean bot, String... fields) {
