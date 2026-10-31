@@ -36,6 +36,7 @@ interface Summary {
   bots: number
   conversations: number
   messages: number
+  version?: string
 }
 
 interface ThreadMessage {
@@ -62,7 +63,14 @@ const busy = ref(false)
 const notice = ref('')
 const noticeKind = ref<'ok' | 'warn'>('ok')
 
-const summary = ref<Summary>({ visitors: 0, humans: 0, bots: 0, conversations: 0, messages: 0 })
+const summary = ref<Summary>({
+  visitors: 0,
+  humans: 0,
+  bots: 0,
+  conversations: 0,
+  messages: 0,
+  version: '',
+})
 const visitors = ref<VisitorRow[]>([])
 const conversations = ref<ConversationRow[]>([])
 const total = ref(0)
@@ -317,6 +325,41 @@ function fmtTime(value: number | null | undefined) {
   return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`
 }
 
+/** A short "系统 · 浏览器" line, the same shape the visitor list shows. */
+function deviceSummary(userAgent: string | null | undefined) {
+  if (!userAgent) {
+    return '未知设备'
+  }
+  const ua = userAgent
+  let os = '其它'
+  if (/Windows/i.test(ua)) {
+    os = 'Windows'
+  } else if (/Android/i.test(ua)) {
+    os = 'Android'
+  } else if (/iPhone|iPad|iPod/i.test(ua)) {
+    os = 'iOS'
+  } else if (/Macintosh|Mac OS X/i.test(ua)) {
+    os = 'macOS'
+  } else if (/Linux/i.test(ua)) {
+    os = 'Linux'
+  }
+  let browser = '其它'
+  if (/MicroMessenger/i.test(ua)) {
+    browser = '微信'
+  } else if (/Edg\//i.test(ua)) {
+    browser = 'Edge'
+  } else if (/Chrome\//i.test(ua) && !/OPR\//i.test(ua)) {
+    browser = 'Chrome'
+  } else if (/Firefox\//i.test(ua)) {
+    browser = 'Firefox'
+  } else if (/Safari\//i.test(ua)) {
+    browser = 'Safari'
+  } else if (/bot|crawler|spider/i.test(ua)) {
+    browser = '爬虫'
+  }
+  return `${os} · ${browser}`
+}
+
 function closeDetail() {
   detail.value = null
 }
@@ -342,7 +385,10 @@ onUnmounted(() => {
   <div class="os-md">
     <div class="os-md__head">
       <div>
-        <h2 class="os-md__title">访客数据管理</h2>
+        <h2 class="os-md__title">
+          访客数据管理
+          <span v-if="summary.version" class="os-md__version">v{{ summary.version }}</span>
+        </h2>
         <p class="os-md__desc">
           导出或清除访客数据和聊天记录。每 5 秒自动刷新，点一行可以看详情，需要批量处理时再打开多选。
         </p>
@@ -354,7 +400,7 @@ onUnmounted(() => {
           type="button"
           @click="toggleMulti"
         >
-          {{ multiSelect ? '退出多选' : '开启多选' }}
+          {{ multiSelect ? `退出多选（已选 ${selectedCount}）` : '开启多选' }}
         </button>
       </div>
     </div>
@@ -521,16 +567,15 @@ onUnmounted(() => {
               />
             </th>
             <th>访客</th>
-            <th>类型</th>
+            <th>设备</th>
             <template v-if="scope === 'visitors'">
-              <th>访问次数</th>
-              <th>浏览页面数</th>
-              <th>首次访问</th>
+              <th>最后页面</th>
+              <th class="os-table__right">访问次数</th>
               <th>最近活跃</th>
             </template>
             <template v-else>
               <th>最后一条消息</th>
-              <th>条数</th>
+              <th class="os-table__right">条数</th>
               <th>时间</th>
             </template>
           </tr>
@@ -554,30 +599,33 @@ onUnmounted(() => {
             </td>
             <td>
               <div class="os-visitor">
-                <span class="os-visitor__ip">{{ row.ip || row.visitorKey }}</span>
-                <span v-if="row.location" class="os-visitor__loc">{{ row.location }}</span>
-                <span v-if="scope === 'visitors' && (row as VisitorRow).pageTitle" class="os-visitor__loc">
-                  {{ (row as VisitorRow).pageTitle }}
-                </span>
+                <span class="os-dot" :class="{ 'os-dot--bot': row.bot }" />
+                <div>
+                  <div class="os-visitor__ip">{{ row.ip || row.visitorKey }}</div>
+                  <div class="os-visitor__loc">
+                    <span v-if="row.bot" class="os-badge os-badge--bot">机器人</span>
+                    <span v-else class="os-badge">真人</span>
+                    <template v-if="row.location">{{ row.location }}</template>
+                  </div>
+                </div>
               </div>
             </td>
             <td>
-              <span class="os-badge" :class="{ 'os-badge--bot': row.bot }">
-                {{ row.bot ? '机器人' : '真人' }}
-              </span>
+              <div class="os-device">{{ deviceSummary((row as VisitorRow).userAgent) }}</div>
             </td>
             <template v-if="scope === 'visitors'">
-              <td>{{ (row as VisitorRow).visitCount ?? 0 }}</td>
-              <td>{{ (row as VisitorRow).pageViewCount ?? 0 }}</td>
-              <td class="os-muted">{{ fmtTime((row as VisitorRow).firstSeenAt) }}</td>
-              <td class="os-muted">{{ fmtTime((row as VisitorRow).lastSeenAt) }}</td>
+              <td>
+                <div class="os-page-title">{{ (row as VisitorRow).pageTitle || '—' }}</div>
+              </td>
+              <td class="os-table__right">{{ (row as VisitorRow).visitCount ?? 0 }}</td>
+              <td>{{ fmtTime((row as VisitorRow).lastSeenAt) }}</td>
             </template>
             <template v-else>
               <td>
                 <div class="os-thread-preview">{{ (row as ConversationRow).lastText }}</div>
               </td>
-              <td>{{ (row as ConversationRow).total }}</td>
-              <td class="os-muted">{{ fmtTime((row as ConversationRow).lastAt) }}</td>
+              <td class="os-table__right">{{ (row as ConversationRow).total }}</td>
+              <td>{{ fmtTime((row as ConversationRow).lastAt) }}</td>
             </template>
           </tr>
         </tbody>
@@ -642,11 +690,22 @@ onUnmounted(() => {
     margin-bottom: 1rem;
   }
 
-  &__title {
+  .os-md__title {
     margin: 0;
     font-size: 1.25rem;
     font-weight: 600;
     color: #111827;
+  }
+
+  &__version {
+    margin-left: 0.5rem;
+    padding: 0.0625rem 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #167a72;
+    vertical-align: middle;
+    background: #e8f9f7;
+    border-radius: 0.25rem;
   }
 
   &__desc {
@@ -839,7 +898,8 @@ onUnmounted(() => {
   td {
     padding: 0.625rem 0.75rem;
     text-align: left;
-    vertical-align: top;
+    vertical-align: middle;
+    background: #fff;
     border-bottom: 1px solid #f3f4f6;
   }
 
@@ -853,6 +913,10 @@ onUnmounted(() => {
     border-bottom: none;
   }
 
+  &__right {
+    text-align: right;
+  }
+
   &__check {
     width: 2.5rem;
     padding-right: 0;
@@ -861,11 +925,11 @@ onUnmounted(() => {
   &__pick {
     cursor: pointer;
 
-    &:hover {
+    &:hover td {
       background: #f9fafb;
     }
 
-    &.is-selected {
+    &.is-selected td {
       background: #e8f9f7;
     }
   }
@@ -873,8 +937,8 @@ onUnmounted(() => {
 
 .os-visitor {
   display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
+  gap: 0.5rem;
+  align-items: flex-start;
 
   &__ip {
     font-weight: 600;
@@ -883,9 +947,39 @@ onUnmounted(() => {
   }
 
   &__loc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    align-items: center;
+    margin-top: 0.125rem;
     font-size: 0.75rem;
     color: #6b7280;
   }
+}
+
+.os-dot {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.375rem;
+  background: #39c5bb;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 3px rgb(57 197 187 / 0.18);
+
+  &--bot {
+    background: #d1d5db;
+    box-shadow: none;
+  }
+}
+
+.os-device {
+  color: #374151;
+  white-space: nowrap;
+}
+
+.os-page-title {
+  font-weight: 500;
+  color: #111827;
 }
 
 .os-badge {
@@ -948,10 +1042,13 @@ onUnmounted(() => {
 
   &__jump {
     display: flex;
+    flex: none;
     gap: 0.25rem;
     align-items: center;
+    white-space: nowrap;
 
     input {
+      flex: none;
       width: 4rem;
       padding: 0.25rem 0.375rem;
       font-size: 0.8125rem;

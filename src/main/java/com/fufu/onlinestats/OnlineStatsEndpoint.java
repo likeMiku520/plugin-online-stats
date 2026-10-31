@@ -183,7 +183,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         if (bot) {
             return;
         }
-        if (!recordService.isLoaded() || recordService.get(key) != null) {
+        if (!recordService.isLoaded()) {
             return;
         }
         /* Everything the greeting needs is read from the stored configuration in one go.
@@ -201,7 +201,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             return;
         }
         try {
-            chatService.announceOnce(key, ip, text, effective.announceName(),
+            chatService.announce(key, ip, text, effective.announceName(),
                 effective.announceAvatar(), pageUrl, pageTitle);
         } catch (Exception e) {
             log.warn("Failed to send the automatic greeting to {}", key, e);

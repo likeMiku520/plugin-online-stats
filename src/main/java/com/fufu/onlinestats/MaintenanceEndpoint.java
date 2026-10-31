@@ -106,7 +106,31 @@ public class MaintenanceEndpoint implements CustomEndpoint {
         payload.put("bots", bots);
         payload.put("conversations", chatService.allConversations().size());
         payload.put("messages", messages);
+        // Shown on the page so the running build can be identified at a glance.
+        payload.put("version", pluginVersion());
         return ServerResponse.ok().bodyValue(payload);
+    }
+
+    /** The version Halo loaded, read from this plugin's own manifest. */
+    private String pluginVersion() {
+        try {
+            var resource = getClass().getClassLoader().getResource("plugin.yaml");
+            if (resource == null) {
+                return "";
+            }
+            try (var in = resource.openStream()) {
+                for (String line : new String(in.readAllBytes(),
+                    java.nio.charset.StandardCharsets.UTF_8).split("\n")) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("version:")) {
+                        return trimmed.substring("version:".length()).replace("\"", "").trim();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not read the plugin version", e);
+        }
+        return "";
     }
 
     /** One page of visitors, filtered and sorted the way the page asks. */

@@ -237,9 +237,9 @@ class ChatMessageServiceTest {
     void theGreetingIsWrittenOnceAndWaitsForTheVisitor() {
         ChatMessageService service = service();
 
-        ChatMessageService.ChatEntry first = service.announceOnce(KEY, "10.0.0.1",
+        ChatMessageService.ChatEntry first = service.announce(KEY, "10.0.0.1",
             "第一次来，随便看看～", "访客消息", "https://cdn.example.com/a.png", "/", "首页");
-        ChatMessageService.ChatEntry second = service.announceOnce(KEY, "10.0.0.1",
+        ChatMessageService.ChatEntry second = service.announce(KEY, "10.0.0.1",
             "第一次来，随便看看～", "访客消息", null, "/", "首页");
 
         assertTrue(first != null);
@@ -254,7 +254,7 @@ class ChatMessageServiceTest {
         ChatMessageService service = service();
         service.append(KEY, "10.0.0.1", "visitor", "我先说了一句", null, null, null, null);
 
-        assertTrue(service.announceOnce(KEY, "10.0.0.1", "第一次来", "访客消息", null,
+        assertTrue(service.announce(KEY, "10.0.0.1", "第一次来", "访客消息", null,
             "/", "首页") == null);
         assertEquals(1, service.thread(KEY).size());
     }
@@ -263,17 +263,48 @@ class ChatMessageServiceTest {
     void anEmptyGreetingIsNotSent() {
         ChatMessageService service = service();
 
-        assertTrue(service.announceOnce(KEY, "10.0.0.1", "   ", "访客消息", null,
+        assertTrue(service.announce(KEY, "10.0.0.1", "   ", "访客消息", null,
             "/", "首页") == null);
         assertEquals(0, service.thread(KEY).size());
+    }
+
+    @Test
+    void anEditedGreetingReachesADeviceThatAlreadyHasOne() {
+        ChatMessageService service = service();
+        service.announce(KEY, "10.0.0.1", "第一版内容", "访客消息", null, "/", "首页");
+        service.announce(KEY, "10.0.0.1", "第二版内容", "访客消息", null, "/", "首页");
+
+        List<ChatMessageService.ChatEntry> thread = service.thread(KEY);
+        assertEquals(2, thread.size(), "the edited text is sent again");
+        assertEquals("第二版内容", thread.get(thread.size() - 1).text());
+    }
+
+    @Test
+    void anUnchangedGreetingIsNotSentTwice() {
+        ChatMessageService service = service();
+        service.announce(KEY, "10.0.0.1", "同一段内容", "访客消息", null, "/", "首页");
+        service.announce(KEY, "10.0.0.1", "同一段内容", "访客消息", null, "/", "首页");
+
+        assertEquals(1, service.thread(KEY).size(), "the same text never repeats");
+    }
+
+    @Test
+    void aVisitorWhoSpokeFirstKeepsTheirOwnConversation() {
+        ChatMessageService service = service();
+        service.append(KEY, "10.0.0.1", "visitor", "我先说话的", null, null, "/", "首页");
+        service.announce(KEY, "10.0.0.1", "公告", "访客消息", null, "/", "首页");
+
+        List<ChatMessageService.ChatEntry> thread = service.thread(KEY);
+        assertEquals(1, thread.size(), "nothing is inserted ahead of the visitor");
+        assertEquals("我先说话的", thread.get(0).text());
     }
 
     @Test
     void anEditedGreetingIsWhatTheNextGuestActuallyGets() {
         // Two guests arriving at different times, with the text changed in between.
         ChatMessageService service = service();
-        service.announceOnce(KEY, "10.0.0.1", "第一版内容", "访客消息", null, "/", "首页");
-        service.announceOnce(OTHER_KEY, "10.0.0.2", "第二版内容", "访客消息", null, "/", "首页");
+        service.announce(KEY, "10.0.0.1", "第一版内容", "访客消息", null, "/", "首页");
+        service.announce(OTHER_KEY, "10.0.0.2", "第二版内容", "访客消息", null, "/", "首页");
 
         assertEquals("第一版内容", service.thread(KEY).get(0).text());
         assertEquals("第二版内容", service.thread(OTHER_KEY).get(0).text(),

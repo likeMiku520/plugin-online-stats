@@ -196,20 +196,34 @@ public class ChatMessageService {
     }
 
     /**
-     * Sends the automatic greeting to a device that has never had a conversation, and
-     * only once. Two tabs of the same browser can arrive at the same moment, so the
-     * decision and the write happen under one lock.
+     * Sends the automatic greeting, and sends it again whenever its text has changed.
      *
-     * @return the message that was written, or null when this device already has one
+     * <p>Keeping the first text forever made an edit impossible to notice: the device held
+     * one greeting, and every later visit was skipped. The greeting at the head of the
+     * conversation is compared instead, so editing the text reaches visitors on their next
+     * visit while an unchanged text never repeats. Two tabs of the same browser can arrive
+     * at once, so the decision and the write happen under one lock.</p>
+     *
+     * @return the message that was written, or null when this device already has this text
      */
-    public synchronized ChatEntry announceOnce(String key, String ip, String text,
-                                               String authorName, String authorAvatar,
-                                               String pageUrl, String pageTitle) {
+    public synchronized ChatEntry announce(String key, String ip, String text,
+                                           String authorName, String authorAvatar,
+                                           String pageUrl, String pageTitle) {
         if (key == null || text == null || text.isBlank()) {
             return null;
         }
-        if (latestSeq(key) > 0 || hasConversation(key)) {
-            return null;
+        Deque<ChatEntry> thread = conversations.get(key);
+        if (thread != null && !thread.isEmpty()) {
+            ChatEntry first = thread.peekFirst();
+            if (first != null && "admin".equals(first.direction())) {
+                if (text.equals(first.text())) {
+                    return null;
+                }
+            } else {
+                // A visitor who started talking before there was a greeting keeps the
+                // conversation they began; nothing is inserted ahead of their own words.
+                return null;
+            }
         }
         return append(key, ip, "admin", text, authorName, authorAvatar, pageUrl, pageTitle);
     }
