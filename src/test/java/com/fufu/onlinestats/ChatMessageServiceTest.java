@@ -269,6 +269,18 @@ class ChatMessageServiceTest {
     }
 
     @Test
+    void anEditedGreetingIsWhatTheNextGuestActuallyGets() {
+        // Two guests arriving at different times, with the text changed in between.
+        ChatMessageService service = service();
+        service.announceOnce(KEY, "10.0.0.1", "第一版内容", "访客消息", null, "/", "首页");
+        service.announceOnce(OTHER_KEY, "10.0.0.2", "第二版内容", "访客消息", null, "/", "首页");
+
+        assertEquals("第一版内容", service.thread(KEY).get(0).text());
+        assertEquals("第二版内容", service.thread(OTHER_KEY).get(0).text(),
+            "the newer text is used, not the one stored first");
+    }
+
+    @Test
     void messagesOlderThanTheRetentionWindowAreDropped() throws Exception {
         ReactiveExtensionClient client = mock(ReactiveExtensionClient.class);
         doReturn(Flux.just(

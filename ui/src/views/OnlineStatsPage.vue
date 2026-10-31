@@ -45,6 +45,8 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(20)
 const loading = ref(true)
+const geoResetting = ref(false)
+const geoResetNote = ref('')
 const keyword = ref('')
 const status = ref<'all' | 'online' | 'offline'>('all')
 const visitorType = ref<'human' | 'bot' | 'all'>('human')
@@ -164,6 +166,20 @@ async function openUnread(entry: UnreadItem) {
     /* the row may have been cleaned up meanwhile; the next poll drops it */
   } finally {
     unreadBusy.value = ''
+  }
+}
+
+/** Puts the location lookup back to the shipped address, parameters and field list. */
+async function resetGeo() {
+  geoResetting.value = true
+  geoResetNote.value = ''
+  try {
+    await axios.post(`${api}/statistics/geo-reset`)
+    geoResetNote.value = '属地查询已恢复默认设置。'
+  } catch (e) {
+    geoResetNote.value = '重置失败，请稍后再试。'
+  } finally {
+    geoResetting.value = false
   }
 }
 
@@ -378,7 +394,19 @@ onUnmounted(() => {
           <code>/apis/online-stats.halo.run/v1alpha1/online-count</code> 获取。
         </p>
       </div>
+      <div class="os-page__actions">
+        <button
+          class="os-toolbar__refresh"
+          type="button"
+          :disabled="geoResetting"
+          @click="resetGeo"
+        >
+          {{ geoResetting ? '重置中…' : '恢复默认属地设置' }}
+        </button>
+      </div>
     </div>
+
+    <div v-if="geoResetNote" class="os-page__note">{{ geoResetNote }}</div>
 
     <div class="os-page__stats">
       <div class="os-stat">
@@ -508,7 +536,6 @@ onUnmounted(() => {
             </button>
           </div>
           <div class="os-toolbar__sort">
-            <span class="os-toolbar__label">排序</span>
             <div class="os-toolbar__segment">
               <button
                 v-for="option in [

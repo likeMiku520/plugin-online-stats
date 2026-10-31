@@ -128,10 +128,3 @@ spec:
           value: 5000
           min: 100
           max: 100000
-        - $formkit: text
-          name: geoResetToken
-          label: 恢复默认属地设置
-          help: |-
-            在这个框里填 reset 再保存本页，接口地址、附加参数和字段列表都会恢复成插件自带的默认值；保存后这一格会自己清空。
-            想取消就清空这一格再保存。
-          value: ""
