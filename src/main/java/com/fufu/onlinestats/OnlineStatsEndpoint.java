@@ -66,6 +66,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     private final ChatMessageService chatService;
     private final ReactiveSettingFetcher settingFetcher;
     private final run.halo.app.extension.ReactiveExtensionClient extensionClient;
+    private final LiveSettings liveSettings;
     private final String pluginConfigMapName;
 
     private static final Logger log = LoggerFactory.getLogger(OnlineStatsEndpoint.class);
@@ -81,6 +82,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
                                ChatMessageService chatService,
                                ReactiveSettingFetcher settingFetcher,
                                run.halo.app.extension.ReactiveExtensionClient extensionClient,
+                               LiveSettings liveSettings,
                                run.halo.app.plugin.PluginContext pluginContext) {
         this.registry = registry;
         this.recordService = recordService;
@@ -90,6 +92,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         this.chatService = chatService;
         this.settingFetcher = settingFetcher;
         this.extensionClient = extensionClient;
+        this.liveSettings = liveSettings;
         this.pluginConfigMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
@@ -123,7 +126,6 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .GET("/chat-messages", this::getChatMessages)
             .POST("/chat-send", this::postChatSend)
             .POST("/chat-read-all", this::postChatReadAll)
-            .POST("/statistics/geo-reset", this::postGeoReset)
             .build();
     }
 
@@ -184,54 +186,28 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         if (!recordService.isLoaded() || recordService.get(key) != null) {
             return;
         }
-        // The greeting is read straight from the stored configuration rather than from
-        // the settings object, which Halo serves from a cache that a console save does
-        // not always clear right away. A guest who arrives minutes after the text was
-        // edited must get the edited text.
-        String text = announceTextFromStore().orElse(settings.announceText());
+        /* Everything the greeting needs is read from the stored configuration in one go.
+         * Halo serves plugin settings from an in-memory cache that its own watcher has to
+         * clear, so relying on the settings object meant a guest could still receive the
+         * text that was saved the first time. The stored values win; the object is only a
+         * fallback for when the store cannot be read at all. */
+        OnlineStatsSettings stored = liveSettings.chatSettings(pluginConfigMapName).orElse(null);
+        OnlineStatsSettings effective = stored != null ? stored : settings;
+        if (!effective.chatAnnounceActive()) {
+            return;
+        }
+        String text = effective.announceText();
         if (text == null || text.isBlank()) {
             return;
         }
         try {
-            chatService.announceOnce(key, ip, text,
-                settings.announceName(), settings.announceAvatar(), pageUrl, pageTitle);
+            chatService.announceOnce(key, ip, text, effective.announceName(),
+                effective.announceAvatar(), pageUrl, pageTitle);
         } catch (Exception e) {
             log.warn("Failed to send the automatic greeting to {}", key, e);
         }
     }
 
-    /**
-     * The current greeting text, read from the ConfigMap itself. Halo caches a plugin's
-     * settings and only drops the cache when its own watcher notices a change, so a
-     * console save could otherwise keep sending the first text that was ever stored.
-     *
-     * @return the text, or empty when the configuration cannot be read
-     */
-    private java.util.Optional<String> announceTextFromStore() {
-        if (pluginConfigMapName == null || pluginConfigMapName.isBlank()) {
-            return java.util.Optional.empty();
-        }
-        try {
-            run.halo.app.extension.ConfigMap configMap = extensionClient
-                .fetch(run.halo.app.extension.ConfigMap.class, pluginConfigMapName)
-                .block(java.time.Duration.ofSeconds(3));
-            if (configMap == null || configMap.getData() == null) {
-                return java.util.Optional.empty();
-            }
-            java.util.Map<String, String> data = configMap.getData();
-            String raw = data.get(OnlineStatsSettings.GROUP_CHAT);
-            if (raw == null || raw.isBlank()) {
-                return java.util.Optional.empty();
-            }
-            com.fasterxml.jackson.databind.JsonNode node =
-                new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
-            String text = node.path("chatAnnounceText").asText("");
-            return text.isBlank() ? java.util.Optional.empty() : java.util.Optional.of(text);
-        } catch (Exception e) {
-            log.debug("Could not read the greeting text from the stored configuration", e);
-            return java.util.Optional.empty();
-        }
-    }
 
     private OnlineVisitorRegistry.Heartbeat toHeartbeat(Map<String, Object> body) {
         return new OnlineVisitorRegistry.Heartbeat(
@@ -900,21 +876,12 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     }
 
     /**
-     * Puts the location lookup back to the shipped defaults: address, extra parameters
-     * and the field list. The console button calls this because a settings form can only
-     * save the tab it is editing.
+     * Poll target of the tracker script. The conversation key is derived from the
+     * request itself, never from a parameter, so a caller can only ever read the
+     * conversation of the device that made the call. The chat is refused over an
+     * unencrypted connection when the setting asks for HTTPS, so the text cannot be
+     * read off the wire.
      */
-    private Mono<ServerResponse> postGeoReset(ServerRequest request) {
-        return applyGeoDefaults()
-            .flatMap(saved -> fetchSettings())
-            .flatMap(settings -> {
-                Map<String, Object> payload = new java.util.LinkedHashMap<>();
-                payload.put("ok", true);
-                payload.put("endpoint", settings.geoEndpointOrDefault());
-                return ServerResponse.ok().bodyValue(payload);
-            });
-    }
-
     private Mono<ServerResponse> getChatMessages(ServerRequest request) {
         String key = request.queryParam("key").orElse("").trim();
         if (key.isBlank()) {
@@ -1177,64 +1144,6 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .defaultIfEmpty(OnlineStatsSettings.empty());
     }
 
-    /** Writes the shipped location defaults over the data tab and clears the marker. */
-    private Mono<Boolean> applyGeoDefaults() {
-        if (pluginConfigMapName == null || pluginConfigMapName.isBlank()) {
-            return Mono.just(false);
-        }
-        return extensionClient.fetch(run.halo.app.extension.ConfigMap.class, pluginConfigMapName)
-            .flatMap(configMap -> {
-                Map<String, String> data = configMap.getData() == null
-                    ? new java.util.LinkedHashMap<>() : new java.util.LinkedHashMap<>(configMap.getData());
-                Map<String, Object> group = new java.util.LinkedHashMap<>();
-                String existing = data.get(OnlineStatsSettings.GROUP_DATA);
-                if (existing != null && !existing.isBlank()) {
-                    try {
-                        com.fasterxml.jackson.databind.JsonNode node =
-                            new com.fasterxml.jackson.databind.ObjectMapper().readTree(existing);
-                        node.fields().forEachRemaining(entry -> {
-                            if (!entry.getValue().isNull()) {
-                                group.put(entry.getKey(), entry.getValue().isTextual()
-                                    ? entry.getValue().asText("") : entry.getValue().toString());
-                            }
-                        });
-                    } catch (Exception ignored) {
-                        /* a damaged group is simply replaced */
-                    }
-                }
-                group.put("geoEndpoint", IpGeoService.MIR6_ENDPOINT);
-                group.put("geoParams", "[]");
-                group.put("geoFields", defaultGeoFieldsJson());
-                group.put("geoResetToken", "");
-                try {
-                    data.put(OnlineStatsSettings.GROUP_DATA,
-                        new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(group));
-                } catch (Exception e) {
-                    log.warn("Failed to encode the location defaults", e);
-                    return Mono.just(false);
-                }
-                configMap.setData(data);
-                return extensionClient.update(configMap).thenReturn(true);
-            })
-            .onErrorResume(error -> {
-                log.warn("Failed to reset the location settings", error);
-                return Mono.just(false);
-            })
-            .defaultIfEmpty(false);
-    }
-
-    /** The shipped field list, in the shape the repeater stores. */
-    private static String defaultGeoFieldsJson() {
-        try {
-            java.util.List<Map<String, String>> rows = new java.util.ArrayList<>();
-            for (OnlineStatsSettings.GeoField field : OnlineStatsSettings.DEFAULT_GEO_FIELDS) {
-                rows.add(Map.of("label", field.label(), "path", field.path()));
-            }
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(rows);
-        } catch (Exception e) {
-            return "[]";
-        }
-    }
 
     /** One tab as a flat key/value map; a tab that was never saved reads as empty. */
     private Mono<Map<String, String>> fetchTab(String group) {

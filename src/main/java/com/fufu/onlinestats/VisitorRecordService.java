@@ -408,6 +408,48 @@ public class VisitorRecordService {
         }
     }
 
+    /**
+     * Deletes one stored visitor by its key.
+     *
+     * @return whether a record was there and has been deleted
+     */
+    public boolean deleteByKey(String key) {
+        if (key == null || key.isBlank()) {
+            return false;
+        }
+        VisitorRecord record = index.get(key);
+        if (record == null) {
+            return false;
+        }
+        String name = record.getMetadata().getName();
+        try {
+            client.delete(record).block(Duration.ofSeconds(10));
+            index.remove(name);
+            return true;
+        } catch (Exception e) {
+            log.warn("Failed to delete visitor record {}", name, e);
+            return false;
+        }
+    }
+
+    /** Deletes every stored visitor, used by the maintenance page. */
+    public int deleteAll() {
+        int deleted = 0;
+        for (VisitorRecord record : new ArrayList<>(index.values())) {
+            String name = record.getMetadata() == null ? null : record.getMetadata().getName();
+            try {
+                client.delete(record).block(Duration.ofSeconds(10));
+                if (name != null) {
+                    index.remove(name);
+                }
+                deleted++;
+            } catch (Exception e) {
+                log.warn("Failed to delete visitor record {}", name, e);
+            }
+        }
+        return deleted;
+    }
+
     private OnlineStatsSettings currentSettings() {
         try {
             return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)

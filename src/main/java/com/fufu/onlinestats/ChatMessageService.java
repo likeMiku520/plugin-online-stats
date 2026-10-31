@@ -219,6 +219,40 @@ public class ChatMessageService {
         return thread != null && !thread.isEmpty();
     }
 
+    /** Every conversation, used by the maintenance page to export and clear. */
+    public List<Conversation> allConversations() {
+        return conversations();
+    }
+
+    /**
+     * Deletes one conversation and its stored messages.
+     *
+     * @return how many messages were removed
+     */
+    public int clearConversation(String key) {
+        if (key == null || key.isBlank()) {
+            return 0;
+        }
+        Deque<ChatEntry> thread = conversations.remove(key);
+        if (thread == null) {
+            return 0;
+        }
+        List<ChatEntry> copy = new ArrayList<>(thread);
+        for (ChatEntry entry : copy) {
+            delete(entry);
+        }
+        return copy.size();
+    }
+
+    /** Deletes every conversation and its stored messages. */
+    public int clearAllConversations() {
+        int removed = 0;
+        for (String key : new ArrayList<>(conversations.keySet())) {
+            removed += clearConversation(key);
+        }
+        return removed;
+    }
+
     private void evictOldest(Deque<ChatEntry> thread) {
         while (thread.size() > MAX_PER_CONVERSATION) {
             ChatEntry removed = thread.pollFirst();

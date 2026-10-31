@@ -45,8 +45,9 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(20)
 const loading = ref(true)
-const geoResetting = ref(false)
-const geoResetNote = ref('')
+const announceNote = ref('')
+const announceEnabled = ref(false)
+const testing = ref(false)
 const keyword = ref('')
 const status = ref<'all' | 'online' | 'offline'>('all')
 const visitorType = ref<'human' | 'bot' | 'all'>('human')
@@ -169,17 +170,34 @@ async function openUnread(entry: UnreadItem) {
   }
 }
 
-/** Puts the location lookup back to the shipped address, parameters and field list. */
-async function resetGeo() {
-  geoResetting.value = true
-  geoResetNote.value = ''
+/** Sends the configured greeting to the first listed visitor, so the wording can be checked. */
+async function testAnnounce() {
+  const target = items.value[0]
+  if (!target) {
+    announceNote.value = '列表里还没有访客，等有人访问后再试。'
+    return
+  }
+  testing.value = true
+  announceNote.value = ''
   try {
-    await axios.post(`${api}/statistics/geo-reset`)
-    geoResetNote.value = '属地查询已恢复默认设置。'
-  } catch (e) {
-    geoResetNote.value = '重置失败，请稍后再试。'
+    const { data } = await axios.post(`${api}/maintenance/announce-test`, {
+      key: target.name,
+    })
+    announceNote.value = `已发给 ${target.ip ?? '这位访客'}，内容为：${data.text}`
+  } catch (e: any) {
+    announceNote.value = e?.response?.data?.error ?? '发送失败，请稍后再试。'
   } finally {
-    geoResetting.value = false
+    testing.value = false
+  }
+}
+
+/** Tells the page whether the greeting is switched on, so the test button can hide. */
+async function loadAnnounceState() {
+  try {
+    const { data } = await axios.get(`${api}/maintenance/announce-enabled`)
+    announceEnabled.value = Boolean(data.chatAnnounceEnabled)
+  } catch (e) {
+    announceEnabled.value = false
   }
 }
 
@@ -273,9 +291,10 @@ function setSort(value: 'lastSeenAt' | 'firstSeenAt' | 'visits') {
   load()
 }
 
-function goPage(delta: number) {
-  const next = page.value + delta
-  if (next < 1 || next > totalPages.value) {
+/** Moves by one page, or straight to the first or last page when an edge is asked for. */
+function goPage(delta: number, edge = false) {
+  const next = edge ? (delta > 0 ? totalPages.value : 1) : page.value + delta
+  if (next < 1 || next > totalPages.value || next === page.value) {
     return
   }
   page.value = next
@@ -371,6 +390,7 @@ watch([page, size], () => load())
 
 onMounted(() => {
   refresh()
+  loadAnnounceState()
   pollTimer = window.setInterval(refresh, 3_000)
 })
 
@@ -396,17 +416,18 @@ onUnmounted(() => {
       </div>
       <div class="os-page__actions">
         <button
+          v-if="announceEnabled"
           class="os-toolbar__refresh"
           type="button"
-          :disabled="geoResetting"
-          @click="resetGeo"
+          :disabled="testing"
+          @click="testAnnounce"
         >
-          {{ geoResetting ? '重置中…' : '恢复默认属地设置' }}
+          {{ testing ? '发送中…' : '自动访客消息测试' }}
         </button>
       </div>
     </div>
 
-    <div v-if="geoResetNote" class="os-page__note">{{ geoResetNote }}</div>
+    <div v-if="announceNote" class="os-page__note">{{ announceNote }}</div>
 
     <div class="os-page__stats">
       <div class="os-stat">
@@ -643,8 +664,10 @@ onUnmounted(() => {
       <div v-if="total > 0" class="os-pager">
         <span class="os-pager__info">共 {{ total }} 条 · 第 {{ page }}/{{ totalPages }} 页</span>
         <div class="os-pager__actions">
+          <button type="button" :disabled="!canPrev" @click="goPage(-1, true)">首页</button>
           <button type="button" :disabled="!canPrev" @click="goPage(-1)">上一页</button>
           <button type="button" :disabled="!canNext" @click="goPage(1)">下一页</button>
+          <button type="button" :disabled="!canNext" @click="goPage(1, true)">末页</button>
           <span class="os-pager__jump">
             <span>跳至</span>
             <input
