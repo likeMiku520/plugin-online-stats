@@ -353,7 +353,7 @@ describe('the visitor list', () => {
 
     await wrapper.find('.os-stat__open').trigger('click')
     await flushPromises()
-    await wrapper.find('.os-chatwin__item').trigger('click')
+    await wrapper.find('.os-chatwin__total').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.os-drawer-mask').exists()).toBe(true)

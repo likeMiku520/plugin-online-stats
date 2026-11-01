@@ -594,7 +594,18 @@ onUnmounted(() => {
             <dt>打开页面</dt>
             <dd>{{ fmtTime(enteredAtOfCurrentPage) }}</dd>
             <dt>来源页面</dt>
-            <dd class="os-break">{{ detail.referer || '直接访问' }}</dd>
+            <dd class="os-break">
+              {{ detail.referer || '直接访问' }}
+              <a
+                v-if="detail.referer"
+                class="os-link-btn"
+                :href="detail.referer"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开
+              </a>
+            </dd>
           </dl>
         </section>
 
@@ -626,7 +637,18 @@ onUnmounted(() => {
             <dt>入口地址</dt>
             <dd class="os-break">{{ detail.firstPageUrl || '—' }}</dd>
             <dt>首次来源</dt>
-            <dd class="os-break">{{ detail.firstReferer || '直接访问' }}</dd>
+            <dd class="os-break">
+              {{ detail.firstReferer || '直接访问' }}
+              <a
+                v-if="detail.firstReferer"
+                class="os-link-btn"
+                :href="detail.firstReferer"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开
+              </a>
+            </dd>
           </dl>
 
           <ol v-if="visitsOpen && pageVisits.length" class="os-visits">
@@ -757,6 +779,22 @@ onUnmounted(() => {
     margin: 0;
     color: #111827;
     overflow-wrap: anywhere;
+  }
+}
+
+.os-link-btn {
+  display: inline-block;
+  margin-left: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+  color: #0f766e;
+  text-decoration: none;
+  background: #f6fdfc;
+  border: 1px solid #d7f0ed;
+  border-radius: 0.25rem;
+
+  &:hover {
+    background: #eafaf8;
   }
 }
 

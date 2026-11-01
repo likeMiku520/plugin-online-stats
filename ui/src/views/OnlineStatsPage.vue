@@ -72,8 +72,14 @@ const selected = ref<string[]>([])
 const busy = ref(false)
 const manageNote = ref('')
 const chatPanelOpen = ref(false)
+const manageTab = ref<'visitors' | 'chat'>('visitors')
+const manageTabs = [
+  { key: 'visitors' as const, title: '访客数据' },
+  { key: 'chat' as const, title: '聊天记录' },
+]
 const chatWindowOpen = ref(false)
 const chatKeyword = ref('')
+const geoBusy = ref('')
 const filteredConversations = computed(() => {
   const term = chatKeyword.value.trim().toLowerCase()
   if (!term) {
@@ -450,6 +456,30 @@ watch(chatWindowOpen, (open) => {
   }
 })
 
+/** Long messages are trimmed in the list; the full text is in the detail panel. */
+function shorten(text: string | null): string {
+  const value = (text ?? '').trim()
+  return value.length > 16 ? `${value.slice(0, 16)}…` : value
+}
+
+/** Looks the location up on demand and writes it into the open list. */
+async function lookupGeo(item: ConversationItem) {
+  geoBusy.value = item.visitorKey
+  try {
+    const { data } = await axios.get(`${api}/location`, {
+      params: { ip: item.ip ?? '', name: item.visitorKey },
+    })
+    const found = data.location || [data.province, data.city].filter(Boolean).join(' ')
+    if (found) {
+      item.location = found
+    }
+  } catch (e) {
+    manageNote.value = '属地查询失败，请稍后再试。'
+  } finally {
+    geoBusy.value = ''
+  }
+}
+
 function openChatWindow() {
   chatKeyword.value = ''
   chatWindowOpen.value = true
@@ -663,99 +693,94 @@ onUnmounted(() => {
           />
         </div>
         <div class="os-chatwin__body">
-          <button
-            v-for="item in filteredConversations"
-            :key="item.visitorKey"
-            class="os-chatwin__item"
-            type="button"
-            @click="openConversation(item.visitorKey)"
-          >
+          <div v-for="item in filteredConversations" :key="item.visitorKey" class="os-chatwin__item">
             <span class="os-dot" :class="{ 'os-dot--online': item.online }" />
-            <span class="os-chatwin__who">
+            <button class="os-chatwin__who" type="button" @click="openConversation(item.visitorKey)">
               <span class="os-chatwin__ip">{{ item.ip || item.visitorKey }}</span>
               <span class="os-chatwin__loc">{{ item.location || '未知属地' }}</span>
-            </span>
+            </button>
+            <button
+              v-if="!item.location"
+              class="os-chatwin__geo"
+              type="button"
+              :disabled="geoBusy === item.visitorKey"
+              @click="lookupGeo(item)"
+            >
+              {{ geoBusy === item.visitorKey ? '查询中…' : '查询属地' }}
+            </button>
             <span class="os-chatwin__msg">
               <span class="os-chatwin__msg-label">最后消息</span>
-              <span class="os-chatwin__msg-text">{{ item.lastText }}</span>
+              <span class="os-chatwin__msg-text">{{ shorten(item.lastText) }}</span>
             </span>
-            <span class="os-chatwin__total">{{ item.total }} 条</span>
-          </button>
+            <span class="os-chatwin__when">
+              <span class="os-chatwin__msg-label">最后对话</span>
+              <span>{{ fmtRelative(item.lastAt) }}</span>
+            </span>
+            <button
+              class="os-chatwin__total"
+              type="button"
+              @click="openConversation(item.visitorKey)"
+            >
+              {{ item.total }} 条
+            </button>
+          </div>
           <p v-if="!filteredConversations.length" class="os-chatwin__empty">没有匹配的对话。</p>
         </div>
       </div>
     </div>
 
     <div class="os-manage">
-      <p class="os-manage__hint">已选 {{ selectedCount }} 位访客</p>
-
-      <div class="os-manage__cols">
-      <div class="os-manage__group">
-        <span class="os-manage__label">访客数据</span>
-        <div class="os-manage__row">
+      <div class="os-manage__head">
+        <span class="os-manage__hint">已选中 {{ selectedCount }} 位访客</span>
+        <div class="os-manage__tabs">
           <button
-            class="os-toolbar__refresh"
+            v-for="tab in manageTabs"
+            :key="tab.key"
+            class="os-manage__tab"
+            :class="{ 'is-active': manageTab === tab.key }"
             type="button"
-            :disabled="!selectedCount"
-            @click="exportVisitors(false)"
+            @click="manageTab = tab.key"
           >
-            导出选中
-          </button>
-          <button class="os-toolbar__refresh" type="button" @click="exportVisitors(true)">
-            导出全部
-          </button>
-          <button
-            class="os-toolbar__refresh os-toolbar__refresh--danger"
-            type="button"
-            :disabled="busy || !selectedCount"
-            @click="clearData('visitors', false)"
-          >
-            清除选中
-          </button>
-          <button
-            class="os-toolbar__refresh os-toolbar__refresh--danger"
-            type="button"
-            :disabled="busy"
-            @click="clearData('visitors', true)"
-          >
-            清除全部
+            {{ tab.title }}
           </button>
         </div>
       </div>
 
-      <div class="os-manage__group">
-        <span class="os-manage__label">聊天记录</span>
-        <div class="os-manage__row">
-          <button
-            class="os-toolbar__refresh"
-            type="button"
-            :disabled="!selectedCount"
-            @click="exportChat(false)"
-          >
-            导出选中
-          </button>
-          <button class="os-toolbar__refresh" type="button" @click="exportChat(true)">
-            导出全部
-          </button>
-          <button
-            class="os-toolbar__refresh os-toolbar__refresh--danger"
-            type="button"
-            :disabled="busy || !selectedCount"
-            @click="clearData('chat', false)"
-          >
-            清除选中
-          </button>
-          <button
-            class="os-toolbar__refresh os-toolbar__refresh--danger"
-            type="button"
-            :disabled="busy"
-            @click="clearData('chat', true)"
-          >
-            清除全部
-          </button>
-        </div>
+      <div class="os-manage__actions">
+        <button
+          class="os-toolbar__refresh os-toolbar__refresh--soft"
+          type="button"
+          :disabled="!selectedCount"
+          @click="manageTab === 'visitors' ? exportVisitors(false) : exportChat(false)"
+        >
+          导出选中
+        </button>
+        <button
+          class="os-toolbar__refresh"
+          type="button"
+          @click="manageTab === 'visitors' ? exportVisitors(true) : exportChat(true)"
+        >
+          导出全部
+        </button>
+        <span class="os-manage__gap" />
+        <button
+          class="os-toolbar__refresh os-toolbar__refresh--danger"
+          type="button"
+          :disabled="busy || !selectedCount"
+          @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', false)"
+        >
+          清除选中
+        </button>
+        <button
+          class="os-toolbar__refresh os-toolbar__refresh--danger"
+          type="button"
+          :disabled="busy"
+          @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', true)"
+        >
+          清除全部
+        </button>
       </div>
-      </div>
+
       <p v-if="manageNote" class="os-manage__note">{{ manageNote }}</p>
     </div>
 
@@ -1233,6 +1258,23 @@ onUnmounted(() => {
 }
 
 /* Clearing is destructive, so those buttons are red whether or not they can be used. */
+.os-toolbar__refresh--soft {
+  color: #0f766e;
+  background: #f6fdfc;
+  border-color: #d7f0ed;
+
+  &:hover:not(:disabled) {
+    background: #eafaf8;
+  }
+
+  &:disabled {
+    color: #c3cbd3;
+    cursor: not-allowed;
+    background: #fafbfc;
+    border-color: #eef0f2;
+  }
+}
+
 .os-toolbar__refresh--danger {
   color: #b91c1c;
   background: #fef2f2;
@@ -1637,33 +1679,51 @@ onUnmounted(() => {
   border-radius: 0.5rem;
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
 
-  &__row {
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #f3f4f6;
+  }
+
+  &__tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-left: auto;
+    padding: 0.125rem;
+    background: #f3f4f6;
+    border-radius: 0.375rem;
+  }
+
+  &__tab {
+    padding: 0.25rem 0.75rem;
+    font: inherit;
+    font-size: 0.8125rem;
+    color: #111827;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    border-radius: 0.25rem;
+
+    &.is-active {
+      color: #0f766e;
+      background: #fff;
+      box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+    }
+  }
+
+  &__actions {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
   }
 
-  &__cols {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-    gap: 0.75rem 1.25rem;
-  }
-
-  &__group {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-    padding-top: 0.5rem;
-    border-top: 1px dashed #f3f4f6;
-  }
-
-  &__label {
-    flex: none;
-    width: 4rem;
-    font-size: 0.75rem;
-    color: #9ca3af;
+  &__gap {
+    flex: 1;
+    min-width: 1rem;
   }
 
   &__hint {
@@ -1762,13 +1822,6 @@ onUnmounted(() => {
     }
   }
 
-  &__who {
-    display: flex;
-    flex: none;
-    flex-direction: column;
-    width: 9rem;
-  }
-
   &__ip {
     font-weight: 600;
     color: #111827;
@@ -1777,6 +1830,44 @@ onUnmounted(() => {
 
   &__loc {
     font-size: 0.6875rem;
+    color: #6b7280;
+  }
+
+  &__who {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: 8.5rem;
+    padding: 0;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+  }
+
+  &__geo {
+    flex: none;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.6875rem;
+    color: #0f766e;
+    cursor: pointer;
+    background: #f6fdfc;
+    border: 1px solid #d7f0ed;
+    border-radius: 0.25rem;
+
+    &:disabled {
+      cursor: progress;
+      opacity: 0.7;
+    }
+  }
+
+  &__when {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: 5rem;
+    font-size: 0.75rem;
     color: #6b7280;
   }
 
@@ -1801,8 +1892,16 @@ onUnmounted(() => {
 
   &__total {
     flex: none;
+    padding: 0.125rem 0.375rem;
     font-size: 0.75rem;
     color: #39c5bb;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
   }
 
   &__empty {

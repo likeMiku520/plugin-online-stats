@@ -46,6 +46,12 @@ public class ArticleStat extends AbstractExtension {
 
         private Long todayVisitors;
 
+        /**
+         * The day the two numbers above belong to. Without it a stale read cannot be told
+         * apart from a new day, and the ranking was free to fall back to an older count.
+         */
+        private String todayDate;
+
         private Long totalOnlineMs;
 
         private Long firstSeenAt;

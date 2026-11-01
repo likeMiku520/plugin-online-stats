@@ -62,7 +62,6 @@ public class ChatMessageService {
     public static final int MAX_TEXT_LENGTH = 1000;
 
     private static final int MAX_PER_CONVERSATION = 100;
-    private static final int MAX_CONVERSATIONS = 200;
     private static final int MAX_PENDING_WRITES = 500;
     private static final Duration WRITE_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration LOAD_TIMEOUT = Duration.ofSeconds(10);
@@ -191,7 +190,6 @@ public class ChatMessageService {
             conversations.computeIfAbsent(key, ignored -> new ConcurrentLinkedDeque<>());
         thread.addLast(entry);
         evictOldest(thread);
-        trimConversations();
         persist(entry);
         return entry;
     }
@@ -303,25 +301,6 @@ public class ChatMessageService {
                 return;
             }
             delete(removed);
-        }
-    }
-
-    private void trimConversations() {
-        while (conversations.size() > MAX_CONVERSATIONS) {
-            String oldestKey = null;
-            long oldestAt = Long.MAX_VALUE;
-            for (Map.Entry<String, Deque<ChatEntry>> entry : conversations.entrySet()) {
-                ChatEntry last = entry.getValue().peekLast();
-                long at = last == null ? 0L : last.sentAt();
-                if (at < oldestAt) {
-                    oldestAt = at;
-                    oldestKey = entry.getKey();
-                }
-            }
-            if (oldestKey == null) {
-                return;
-            }
-            conversations.remove(oldestKey);
         }
     }
 
@@ -541,7 +520,6 @@ public class ChatMessageService {
         }
         seq.set(Math.max(seq.get(), highest));
         loaded = true;
-        trimConversations();
         log.debug("Loaded {} chat conversations", conversations.size());
     }
 

@@ -583,8 +583,14 @@ public class StatsAggregationService {
         // Today's numbers for one article come from the daily aggregate, which is the
         // only place that knows the calendar boundary.
         if (daily != null) {
-            spec.setTodayViews(nvl(daily.getSpec().getPosts().get(name)));
-            spec.setTodayVisitors((long) countTodayVisitors(spec, daily));
+            String today = daily.getSpec().getDate();
+            long todayViews = mergeToday(nvl(daily.getSpec().getPosts().get(name)),
+                nvl(spec.getTodayViews()), spec.getTodayDate(), today);
+            long todayVisitors = mergeToday((long) countTodayVisitors(spec, daily),
+                nvl(spec.getTodayVisitors()), spec.getTodayDate(), today);
+            spec.setTodayDate(today);
+            spec.setTodayViews(todayViews);
+            spec.setTodayVisitors(todayVisitors);
         }
 
         trimLong(spec.getBrowsers());
@@ -595,6 +601,19 @@ public class StatsAggregationService {
         trimLong(spec.getVisitorLastSeen());
         trimString(spec.getVisitorIps());
         saveArticle(stat);
+    }
+
+    /**
+     * Today's figure for one article. Within a day it may only climb: a day record read
+     * back after a conflict is sometimes a beat behind, and writing that value out gave
+     * the ranking a way to fall from 90 to 60 while nothing had been deleted. A new day
+     * starts from the day record.
+     */
+    static long mergeToday(long fromDaily, long stored, String storedDate, String today) {
+        if (today != null && today.equals(storedDate)) {
+            return Math.max(fromDaily, stored);
+        }
+        return fromDaily;
     }
 
     private static int countTodayVisitors(ArticleStat.Spec spec, DailyStat daily) {
@@ -682,51 +701,139 @@ public class StatsAggregationService {
     public synchronized void saveArticle(ArticleStat stat) {
         String name = stat.getMetadata().getName();
         boolean isNew = !articleIndex.containsKey(name);
-        try {
-            ArticleStat result = isNew
-                ? client.create(stat).block(Duration.ofSeconds(10))
-                : client.update(stat).block(Duration.ofSeconds(10));
-            articleIndex.put(name, result != null ? result : stat);
-        } catch (Exception e) {
-            if (isNew) {
-                try {
-                    ArticleStat existing = client.fetch(ArticleStat.class, name)
-                        .block(Duration.ofSeconds(5));
-                    if (existing != null) {
-                        articleIndex.put(name, existing);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                ArticleStat result = isNew
+                    ? client.create(stat).block(Duration.ofSeconds(10))
+                    : client.update(stat).block(Duration.ofSeconds(10));
+                articleIndex.put(name, result != null ? result : stat);
+                return;
+            } catch (Exception e) {
+                // Same rule as the daily record: the counters in memory must not be
+                // dropped because somebody else wrote this article first.
+                ArticleStat existing = fetchArticleQuietly(name);
+                if (existing == null) {
+                    if (isNew) {
+                        log.debug("Failed to create article stat {}", name, e);
+                        return;
                     }
-                } catch (Exception ignored) {
-                    log.debug("Failed to save article stat {}", name, e);
+                    articleIndex.remove(name);
+                    isNew = true;
+                    continue;
                 }
-            } else {
-                log.debug("Failed to update article stat {}", name, e);
+                mergeInto(existing, stat);
+                stat = existing;
+                isNew = false;
             }
         }
+        log.debug("Gave up saving article stat {} after three attempts", name);
+    }
+
+    private ArticleStat fetchArticleQuietly(String name) {
+        try {
+            return client.fetch(ArticleStat.class, name).block(Duration.ofSeconds(5));
+        } catch (Exception e) {
+            log.debug("Could not read article stat {} back", name, e);
+            return null;
+        }
+    }
+
+    private static void mergeInto(ArticleStat target, ArticleStat mine) {
+        ArticleStat.Spec into = target.getSpec();
+        ArticleStat.Spec from = mine.getSpec();
+        if (into == null || from == null) {
+            return;
+        }
+        into.setViews(Math.max(nvl(into.getViews()), nvl(from.getViews())));
+        into.setVisitors(Math.max(nvl(into.getVisitors()), nvl(from.getVisitors())));
+        into.setTotalOnlineMs(Math.max(nvl(into.getTotalOnlineMs()),
+            nvl(from.getTotalOnlineMs())));
+        // Today's numbers may only go up within a day; a stale copy must not drag the
+        // ranking back down, which is what made a page show 90 views and later 60.
+        if (into.getTodayDate() != null && into.getTodayDate().equals(from.getTodayDate())) {
+            into.setTodayViews(Math.max(nvl(into.getTodayViews()), nvl(from.getTodayViews())));
+            into.setTodayVisitors(Math.max(nvl(into.getTodayVisitors()),
+                nvl(from.getTodayVisitors())));
+        } else {
+            into.setTodayDate(from.getTodayDate());
+            into.setTodayViews(nvl(from.getTodayViews()));
+            into.setTodayVisitors(nvl(from.getTodayVisitors()));
+        }
+        mergeMax(into.getBrowsers(), from.getBrowsers());
+        mergeMax(into.getSystems(), from.getSystems());
+        mergeMax(into.getReferrers(), from.getReferrers());
+        mergeMax(into.getVisitorViews(), from.getVisitorViews());
+        mergeMax(into.getVisitorDurations(), from.getVisitorDurations());
+        mergeMax(into.getVisitorLastSeen(), from.getVisitorLastSeen());
     }
 
     public synchronized void saveDaily(DailyStat stat) {
         String name = stat.getMetadata().getName();
         boolean isNew = !dailyIndex.containsKey(name);
-        try {
-            DailyStat result = isNew
-                ? client.create(stat).block(Duration.ofSeconds(10))
-                : client.update(stat).block(Duration.ofSeconds(10));
-            dailyIndex.put(name, result != null ? result : stat);
-        } catch (Exception e) {
-            if (isNew) {
-                try {
-                    DailyStat existing = client.fetch(DailyStat.class, name)
-                        .block(Duration.ofSeconds(5));
-                    if (existing != null) {
-                        dailyIndex.put(name, existing);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                DailyStat result = isNew
+                    ? client.create(stat).block(Duration.ofSeconds(10))
+                    : client.update(stat).block(Duration.ofSeconds(10));
+                dailyIndex.put(name, result != null ? result : stat);
+                return;
+            } catch (Exception e) {
+                /* The write carries counters accumulated in memory, so giving up loses
+                 * them for good. A conflict means someone else wrote this day (another
+                 * instance, or a request that finished first): take their version and
+                 * put ours on top of it, then try again. */
+                DailyStat existing = fetchQuietly(name);
+                if (existing == null) {
+                    if (isNew) {
+                        log.debug("Failed to create daily stat {}", name, e);
+                        return;
                     }
-                } catch (Exception ignored) {
-                    log.debug("Failed to save daily stat {}", name, e);
+                    dailyIndex.remove(name);
+                    isNew = true;
+                    continue;
                 }
-            } else {
-                log.debug("Failed to update daily stat {}", name, e);
+                mergeInto(existing, stat);
+                stat = existing;
+                isNew = false;
             }
         }
+        log.debug("Gave up saving daily stat {} after three attempts", name);
+    }
+
+    private DailyStat fetchQuietly(String name) {
+        try {
+            return client.fetch(DailyStat.class, name).block(Duration.ofSeconds(5));
+        } catch (Exception e) {
+            log.debug("Could not read daily stat {} back", name, e);
+            return null;
+        }
+    }
+
+    /**
+     * Folds the numbers accumulated in memory into the version that came back from the
+     * store, so a retry never writes less than what was already counted.
+     */
+    private static void mergeInto(DailyStat target, DailyStat mine) {
+        DailyStat.Spec into = target.getSpec();
+        DailyStat.Spec from = mine.getSpec();
+        if (into == null || from == null) {
+            return;
+        }
+        into.setViews(Math.max(nvl(into.getViews()), nvl(from.getViews())));
+        into.setVisitors(Math.max(nvl(into.getVisitors()), nvl(from.getVisitors())));
+        into.setTotalOnlineMs(Math.max(nvl(into.getTotalOnlineMs()),
+            nvl(from.getTotalOnlineMs())));
+        mergeMax(into.getPosts(), from.getPosts());
+        mergeMax(into.getBrowsers(), from.getBrowsers());
+        mergeMax(into.getSystems(), from.getSystems());
+        mergeMax(into.getReferrers(), from.getReferrers());
+        mergeMax(into.getCountries(), from.getCountries());
+        mergeMax(into.getVisitorViews(), from.getVisitorViews());
+        from.getVisitorIps().forEach(into.getVisitorIps()::putIfAbsent);
+    }
+
+    private static void mergeMax(Map<String, Long> into, Map<String, Long> from) {
+        from.forEach((key, value) -> into.merge(key, value, Math::max));
     }
 
     public void clear() {

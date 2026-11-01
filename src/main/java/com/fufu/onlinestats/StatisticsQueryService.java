@@ -319,6 +319,11 @@ public class StatisticsQueryService {
                 // same label or the row stops matching its drilldown.
                 case "referer" -> StatsAggregationService.refererHost(refererOf(record.getSpec()));
                 case "country" -> record.getSpec().getCountry();
+                // A device is described by its screen size: it stays the same across
+                // sessions, which is what makes it worth ranking.
+                case "device" -> deviceLabel(record.getSpec());
+                // The page a device last stayed on stands in for "where they went".
+                case "page" -> pageLabel(record.getSpec());
                 default -> uaLabel(record.getSpec().getUserAgent(), "browser");
             };
             String label = key == null || key.isBlank() ? "未知" : key;
@@ -360,6 +365,44 @@ public class StatisticsQueryService {
             return spec.getFirstReferer();
         }
         return spec.getLastReferer();
+    }
+
+    /** Screen size, which describes the device itself rather than the visit. */
+    private static String deviceLabel(VisitorRecord.Spec spec) {
+        String screen = spec.getScreen();
+        if (screen == null || screen.isBlank()) {
+            return "未知设备";
+        }
+        String[] parts = screen.split("x");
+        if (parts.length != 2) {
+            return screen;
+        }
+        try {
+            int width = Integer.parseInt(parts[0].trim());
+            if (width >= 1200) {
+                return "桌面 " + screen;
+            }
+            if (width >= 768) {
+                return "平板 " + screen;
+            }
+            return "手机 " + screen;
+        } catch (NumberFormatException e) {
+            return screen;
+        }
+    }
+
+    /** The page a device was last seen on, shown by its title when there is one. */
+    private static String pageLabel(VisitorRecord.Spec spec) {
+        String title = spec.getLastPageTitle();
+        if (title != null && !title.isBlank()) {
+            return title;
+        }
+        String url = spec.getLastPageUrl();
+        if (url == null || url.isBlank()) {
+            return "未知页面";
+        }
+        int at = url.indexOf('?');
+        return at > 0 ? url.substring(0, at) : url;
     }
 
     private static long windowStartMillis(int days, String from) {

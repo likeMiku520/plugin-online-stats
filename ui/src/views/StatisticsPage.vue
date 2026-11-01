@@ -53,6 +53,8 @@ const overview = ref<Overview | null>(null)
 const series = ref<Point[]>([])
 const articles = ref<ArticleRow[]>([])
 const browsers = ref<SourceItem[]>([])
+const devices = ref<SourceItem[]>([])
+const pages = ref<SourceItem[]>([])
 const systems = ref<SourceItem[]>([])
 const referers = ref<SourceItem[]>([])
 const trendDays = ref(90)
@@ -128,7 +130,7 @@ async function loadAll() {
   // sent with each request instead of being applied to already loaded numbers.
   const filter = { type: scope.value }
   try {
-    const [ov, tr, ar, br, sy, rf] = await Promise.all([
+    const [ov, tr, ar, br, sy, rf, dv, pg] = await Promise.all([
       axios.get(`${api}/statistics/overview`, { params: filter }),
       axios.get(`${api}/statistics/trend`, { params: { ...filter, days: trendDays.value } }),
       axios.get(`${api}/statistics/articles`, {
@@ -143,6 +145,12 @@ async function loadAll() {
       axios.get(`${api}/statistics/sources`, {
         params: { ...filter, dimension: 'referer', days: 30 },
       }),
+      axios.get(`${api}/statistics/sources`, {
+        params: { ...filter, dimension: 'device', days: 30 },
+      }),
+      axios.get(`${api}/statistics/sources`, {
+        params: { ...filter, dimension: 'page', days: 30 },
+      }),
     ])
     overview.value = ov.data
     series.value = tr.data.series || []
@@ -150,6 +158,8 @@ async function loadAll() {
     browsers.value = br.data.items || []
     systems.value = sy.data.items || []
     referers.value = rf.data.items || []
+    devices.value = dv.data.items || []
+    pages.value = pg.data.items || []
     lastLoadedAt.value = Date.now()
   } catch (e) {
     refreshFailed.value = true
@@ -300,6 +310,11 @@ const emptyHint = computed(() => {
   }
   return '还没有文章页的访问记录。打开任意一篇文章停留十几秒，再回来看这里。'
 })
+/** A page rank shows titles, which can be long; the list keeps them short. */
+function pageLabel(name: string): string {
+  return name.length > 18 ? `${name.slice(0, 18)}…` : name
+}
+
 const maxSourceViews = computed(() =>
   Math.max(1, ...browsers.value.map((s) => s.views), ...systems.value.map((s) => s.views)),
 )
@@ -434,9 +449,9 @@ onUnmounted(() => {
         <div class="os-seg">
           <button
             v-for="option in [
-              { value: 90, label: '近 90 天' },
-              { value: 30, label: '近 30 天' },
               { value: 7, label: '近 7 天' },
+              { value: 30, label: '近 30 天' },
+              { value: 90, label: '近 90 天' },
             ]"
             :key="option.value"
             type="button"
@@ -450,7 +465,8 @@ onUnmounted(() => {
       <StatsChart :series="series" metric="views" />
     </section>
 
-    <div class="os-grid">
+    <div class="os-scroll">
+      <div class="os-grid">
       <section class="os-panel">
         <h3>浏览器来源</h3>
         <ul class="os-bars">
@@ -486,6 +502,31 @@ onUnmounted(() => {
           <li v-if="!referers.length" class="os-bars__empty">暂无数据</li>
         </ul>
       </section>
+
+      <section class="os-panel">
+        <h3>设备来源</h3>
+        <ul class="os-bars">
+          <li v-for="item in devices" :key="item.name">
+            <span class="os-bars__name">{{ item.name }}</span>
+            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
+            <span class="os-bars__value">{{ item.views }}</span>
+          </li>
+          <li v-if="!devices.length" class="os-bars__empty">暂无数据</li>
+        </ul>
+      </section>
+
+      <section class="os-panel">
+        <h3>页面地址</h3>
+        <ul class="os-bars">
+          <li v-for="item in pages" :key="item.name" :title="item.name">
+            <span class="os-bars__name" :title="item.name">{{ pageLabel(item.name) }}</span>
+            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
+            <span class="os-bars__value">{{ item.views }}</span>
+          </li>
+          <li v-if="!pages.length" class="os-bars__empty">暂无数据</li>
+        </ul>
+      </section>
+      </div>
     </div>
 
     <section class="os-panel">
@@ -775,10 +816,26 @@ onUnmounted(() => {
   }
 }
 
+.os-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: thin;
+
+  &::-webkit-scrollbar {
+    height: 0.5rem;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: #d1d5db;
+    border-radius: 9999px;
+  }
+}
+
 .os-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(5, minmax(19rem, 1fr));
   gap: 1rem;
+  min-width: max-content;
 
   .os-panel {
     margin-bottom: 1rem;
