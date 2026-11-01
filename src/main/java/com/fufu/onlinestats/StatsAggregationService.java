@@ -37,6 +37,9 @@ public class StatsAggregationService {
 
     private static final int MAX_VISITOR_KEYS = 5000;
     private static final int MAX_MAP_ENTRIES = 400;
+
+    /** Per-device maps keep the same ceiling as the record list, not the label ceiling. */
+    private static final int MAX_DEVICE_ENTRIES = MAX_VISITOR_KEYS;
     private static final long MAX_DURATION_GAP_MS = 5L * 60 * 1000;
     private static final String COUNTER_PREFIX = "posts.content.halo.run/";
 
@@ -538,7 +541,11 @@ public class StatsAggregationService {
             spec.setTotalOnlineMs(nvl(spec.getTotalOnlineMs()) + durationDelta);
             spec.durationsOrEmpty().merge(visitor.getKey(), durationDelta, Long::sum);
         }
-        spec.setVisitors((long) spec.getVisitorViews().size());
+        /* The visitor count only ever grows within a day. Reading it back from a map is
+         * fine while nothing trims that map, but a counted visitor must never disappear
+         * because a write came back slightly behind. */
+        spec.setVisitors(Math.max(nvl(spec.getVisitors()),
+            (long) spec.getVisitorViews().size()));
         if (settings.showIpInConsoleOrDefault() && visitor.getIp() != null) {
             spec.getVisitorIps().put(visitor.getKey(), visitor.getIp());
         }
@@ -547,8 +554,8 @@ public class StatsAggregationService {
         trimLong(spec.getReferrers());
         trimLong(spec.getPosts());
         trimLong(spec.pagesOrEmpty());
-        trimLong(spec.durationsOrEmpty());
-        trimLong(spec.getVisitorViews());
+        trimLong(spec.durationsOrEmpty(), MAX_DEVICE_ENTRIES);
+        trimLong(spec.getVisitorViews(), MAX_DEVICE_ENTRIES);
         trimString(spec.getVisitorIps());
         saveDaily(stat);
     }
@@ -583,7 +590,8 @@ public class StatsAggregationService {
             spec.setTotalOnlineMs(nvl(spec.getTotalOnlineMs()) + durationDelta);
             spec.getVisitorDurations().merge(visitor.getKey(), durationDelta, Long::sum);
         }
-        spec.setVisitors((long) spec.getVisitorViews().size());
+        spec.setVisitors(Math.max(nvl(spec.getVisitors()),
+            (long) spec.getVisitorViews().size()));
         spec.setFirstSeenAt(spec.getFirstSeenAt() == null
             ? visitor.getFirstSeenAt()
             : Math.min(spec.getFirstSeenAt(), visitor.getFirstSeenAt()));
@@ -609,9 +617,9 @@ public class StatsAggregationService {
         trimLong(spec.getBrowsers());
         trimLong(spec.getSystems());
         trimLong(spec.getReferrers());
-        trimLong(spec.getVisitorViews());
-        trimLong(spec.getVisitorDurations());
-        trimLong(spec.getVisitorLastSeen());
+        trimLong(spec.getVisitorViews(), MAX_DEVICE_ENTRIES);
+        trimLong(spec.getVisitorDurations(), MAX_DEVICE_ENTRIES);
+        trimLong(spec.getVisitorLastSeen(), MAX_DEVICE_ENTRIES);
         trimString(spec.getVisitorIps());
         saveArticle(stat);
     }
@@ -722,14 +730,18 @@ public class StatsAggregationService {
     }
 
     private static void trimLong(Map<String, Long> map) {
-        if (map.size() <= MAX_MAP_ENTRIES) {
+        trimLong(map, MAX_MAP_ENTRIES);
+    }
+
+    private static void trimLong(Map<String, Long> map, int limit) {
+        if (map.size() <= limit) {
             return;
         }
         List<Map.Entry<String, Long>> entries = new ArrayList<>(map.entrySet());
         entries.sort(Comparator.comparingLong(
             (Map.Entry<String, Long> entry) -> entry.getValue()).reversed());
         Map<String, Long> kept = new LinkedHashMap<>();
-        for (int i = 0; i < MAX_MAP_ENTRIES; i++) {
+        for (int i = 0; i < limit; i++) {
             kept.put(entries.get(i).getKey(), entries.get(i).getValue());
         }
         map.clear();

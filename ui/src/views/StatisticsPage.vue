@@ -121,8 +121,10 @@ async function lookupGeo(ip: string | null | undefined) {
   }
 }
 
-async function loadAll() {
-  loading.value = true
+async function loadAll(silent = false) {
+  if (!silent) {
+    loading.value = true
+  }
   refreshing.value = true
   refreshFailed.value = false
   // Every figure on this page follows the selector at the top right, so the filter is
@@ -307,12 +309,25 @@ function top(items: SourceItem[]): SourceItem[] {
   return items.slice(0, 15)
 }
 
-const maxSourceViews = computed(() =>
-  Math.max(1, ...browsers.value.map((s) => s.views), ...systems.value.map((s) => s.views)),
+/**
+ * Browser, system and referrer rows count devices once each, so a visitor who reads ten
+ * pages still appears once. The page ranking counts page views, which is a different
+ * question and keeps its own scale.
+ */
+const maxSourceCount = computed(() =>
+  Math.max(
+    1,
+    ...browsers.value.map((s) => s.visitors ?? 0),
+    ...systems.value.map((s) => s.visitors ?? 0),
+    ...referers.value.map((s) => s.visitors ?? 0),
+  ),
 )
 
-function barWidth(views: number): string {
-  return `${Math.round((views / maxSourceViews.value) * 100)}%`
+const maxPageViews = computed(() => Math.max(1, ...pages.value.map((s) => s.views)))
+
+function barWidth(count: number, of: 'visitor' | 'page'): string {
+  const base = of === 'visitor' ? maxSourceCount.value : maxPageViews.value
+  return `${Math.round((count / base) * 100)}%`
 }
 
 async function setTrendDays(days: number) {
@@ -342,7 +357,9 @@ function setScope(next: 'all' | 'human' | 'bot') {
 
 onMounted(() => {
   loadAll()
-  timer = window.setInterval(loadAll, 10_000)
+  // Every figure is recomputed from the aggregates on each call, so a shorter tick is
+  // what makes a new visit show up while the page is open.
+  timer = window.setInterval(() => loadAll(true), 5_000)
 })
 
 onUnmounted(() => {
@@ -381,7 +398,7 @@ onUnmounted(() => {
           type="button"
           :disabled="refreshing"
           :class="{ 'is-busy': refreshing }"
-          @click="loadAll"
+          @click="loadAll()"
         >
           {{ refreshing ? '刷新中…' : '刷新' }}
         </button>
@@ -459,43 +476,49 @@ onUnmounted(() => {
 
     <div class="os-grid">
       <section class="os-panel">
-        <h3>浏览器来源</h3>
+        <h3>浏览器来源<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
           <li v-for="item in top(browsers)" :key="item.name" @click="openSource('browser', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
-            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
-            <span class="os-bars__value">{{ item.views }}</span>
+            <span class="os-bars__bar">
+              <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
+            </span>
+            <span class="os-bars__value">{{ item.visitors ?? 0 }}</span>
           </li>
           <li v-if="!browsers.length" class="os-bars__empty">暂无数据</li>
         </ul>
       </section>
 
       <section class="os-panel">
-        <h3>操作系统来源</h3>
+        <h3>操作系统来源<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
           <li v-for="item in top(systems)" :key="item.name" @click="openSource('system', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
-            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
-            <span class="os-bars__value">{{ item.views }}</span>
+            <span class="os-bars__bar">
+              <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
+            </span>
+            <span class="os-bars__value">{{ item.visitors ?? 0 }}</span>
           </li>
           <li v-if="!systems.length" class="os-bars__empty">暂无数据</li>
         </ul>
       </section>
 
       <section class="os-panel">
-        <h3>来源站点</h3>
+        <h3>来源站点<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
           <li v-for="item in top(referers)" :key="item.name" @click="openSource('referer', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
-            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
-            <span class="os-bars__value">{{ item.views }}</span>
+            <span class="os-bars__bar">
+              <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
+            </span>
+            <span class="os-bars__value">{{ item.visitors ?? 0 }}</span>
           </li>
           <li v-if="!referers.length" class="os-bars__empty">暂无数据</li>
         </ul>
       </section>
 
       <section class="os-panel">
-        <h3>页面地址</h3>
+        <h3>页面地址<small class="os-panel__note">按浏览量计</small></h3>
         <ul class="os-bars">
           <li
             v-for="item in top(pages)"
@@ -504,7 +527,9 @@ onUnmounted(() => {
             @click="openSource('page', item.name)"
           >
             <span class="os-bars__name" :title="item.name">{{ item.name }}</span>
-            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
+            <span class="os-bars__bar">
+              <i :style="{ width: barWidth(item.views, 'page') }" />
+            </span>
             <span class="os-bars__value">{{ item.views }}</span>
           </li>
           <li v-if="!pages.length" class="os-bars__empty">暂无数据</li>
