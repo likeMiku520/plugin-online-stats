@@ -19,6 +19,9 @@ interface Overview {
   online: number
   articles: number
   trackedArticles: number
+  officialPosts?: number
+  statSaveFailures?: number
+  lastStatSaveError?: string | null
   loaded: boolean
   posts: number
   unresolvedHeartbeats: number
@@ -448,8 +451,18 @@ onUnmounted(() => {
       <div class="os-card">
         <span class="os-card__label">文章数</span>
         <span class="os-card__value">{{ overview.articles }}</span>
-        <span class="os-card__hint">官方有浏览记录的文章</span>
+        <span class="os-card__hint">
+          已记录 {{ overview?.trackedArticles ?? 0 }} 篇 · 官方计数 {{ overview?.officialPosts ?? 0 }} 篇
+        </span>
       </div>
+    </div>
+
+    <div v-if="(overview?.statSaveFailures ?? 0) > 0" class="os-warn">
+      <strong>统计写入失败 {{ overview?.statSaveFailures }} 次</strong>
+      <span>{{ overview?.lastStatSaveError || '没有拿到具体原因，请查看 Halo 日志。' }}</span>
+      <span class="os-warn__hint">
+        这些统计只留在内存里，插件重启后会丢失。请把上面这行错误发出来。
+      </span>
     </div>
 
     <section class="os-panel">
@@ -650,6 +663,24 @@ onUnmounted(() => {
 </template>
 
 <style lang="scss" scoped>
+.os-warn {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.8125rem;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 0.5rem;
+
+  &__hint {
+    font-size: 0.75rem;
+    color: #b45309;
+  }
+}
+
 .os-stat-page {
   padding: 1rem 1.5rem 2.5rem;
 

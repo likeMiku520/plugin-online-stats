@@ -64,6 +64,18 @@ public class StatsAggregationService {
     private volatile int postLoadCount;
     private volatile int unresolvedHeartbeats;
     private volatile String lastHeartbeatUrl;
+
+    private final java.util.concurrent.atomic.AtomicLong statSaveFailures =
+        new java.util.concurrent.atomic.AtomicLong();
+
+    private final java.util.concurrent.atomic.AtomicLong indexLoadFailures =
+        new java.util.concurrent.atomic.AtomicLong();
+
+    private volatile String lastIndexLoadError;
+
+    private volatile String lastStatSaveError;
+
+    private volatile int indexRefreshRuns;
     private volatile long officialViewsTotal;
     private volatile int counterCountTotal;
     private volatile long appliedAdjustment = -1L;
@@ -224,10 +236,20 @@ public class StatsAggregationService {
         }, error -> log.warn("Failed to load posts", error), () -> loaded = true);
     }
 
+    /**
+     * Reads every stored document of one type.
+     *
+     * <p>A listing can fail simply because the plugin starts before the resource type is
+     * ready. That used to be swallowed at debug level, leaving an empty index that showed
+     * up as rows with no numbers — the data was in the store all along. The failure is
+     * counted now, and the scheduled refresh reads it back.</p>
+     */
     private <E extends run.halo.app.extension.Extension> Flux<E> listAll(Class<E> type) {
         return client.listAll(type, ListOptions.builder().build(), Sort.unsorted())
             .onErrorResume(error -> {
-                log.debug("Listing {} failed: {}", type.getSimpleName(), error.toString());
+                indexLoadFailures.incrementAndGet();
+                lastIndexLoadError = type.getSimpleName() + ": " + error.getMessage();
+                log.warn("Listing {} failed", type.getSimpleName(), error);
                 return Flux.empty();
             })
             .subscribeOn(Schedulers.boundedElastic());
@@ -775,6 +797,7 @@ public class StatsAggregationService {
                 articleIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
+                noteStatSaveFailure(e);
                 // Same rule as the daily record: the counters in memory must not be
                 // dropped because somebody else wrote this article first.
                 ArticleStat existing = fetchArticleQuietly(name);
@@ -793,6 +816,35 @@ public class StatsAggregationService {
             }
         }
         log.debug("Gave up saving article stat {} after three attempts", name);
+    }
+
+    private void noteStatSaveFailure(Exception error) {
+        statSaveFailures.incrementAndGet();
+        String message = error == null ? "unknown" : String.valueOf(error.getMessage());
+        lastStatSaveError = message.length() > 300 ? message.substring(0, 300) : message;
+        log.warn("A statistic could not be stored: {}", message, error);
+    }
+
+    /**
+     * Re-reads both statistics from the store. Listing can fail once without anyone
+     * noticing — the failure is only logged — and then the page shows empty rows for
+     * data that is still there. Running this on a timer lets the page heal itself.
+     */
+    public void refreshIndexes() {
+        indexRefreshRuns++;
+        listAll(ArticleStat.class).subscribe(stat -> {
+            String name = nameOf(stat.getMetadata());
+            if (name != null) {
+                articleIndex.put(name, stat);
+            }
+        }, error -> log.warn("Failed to refresh article stats", error));
+
+        listAll(DailyStat.class).subscribe(stat -> {
+            String name = nameOf(stat.getMetadata());
+            if (name != null) {
+                dailyIndex.put(name, stat);
+            }
+        }, error -> log.warn("Failed to refresh daily stats", error));
     }
 
     private ArticleStat fetchArticleQuietly(String name) {
@@ -844,6 +896,7 @@ public class StatsAggregationService {
                 dailyIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
+                noteStatSaveFailure(e);
                 /* The write carries counters accumulated in memory, so giving up loses
                  * them for good. A conflict means someone else wrote this day (another
                  * instance, or a request that finished first): take their version and
@@ -973,6 +1026,11 @@ public class StatsAggregationService {
         info.put("officialViewsTotal", officialViewsTotal);
         info.put("counters", counterCountTotal);
         info.put("officialPosts", officialByPost.size());
+        info.put("statSaveFailures", statSaveFailures.get());
+        info.put("lastStatSaveError", lastStatSaveError);
+        info.put("indexRefreshes", indexRefreshRuns);
+        info.put("indexLoadFailures", indexLoadFailures.get());
+        info.put("lastIndexLoadError", lastIndexLoadError);
         return info;
     }
 }

@@ -53,9 +53,29 @@ public class OnlineStatsPlugin extends BasePlugin {
             thread.setDaemon(true);
             return thread;
         });
+        // The first read can happen before the resource type is ready; retry early so the
+        // page does not sit on an empty index until the slow loop comes round.
+        scheduler.schedule(() -> {
+            try {
+                statsService.refreshIndexes();
+            } catch (Exception ignored) {
+                // the scheduled refresh will try again
+            }
+        }, 5, TimeUnit.SECONDS);
+        scheduler.schedule(() -> {
+            try {
+                statsService.refreshIndexes();
+            } catch (Exception ignored) {
+                // the scheduled refresh will try again
+            }
+        }, 30, TimeUnit.SECONDS);
         scheduler.scheduleWithFixedDelay(() -> {
             try {
                 statsService.refreshOfficialCounts();
+                // Re-reading the statistics also repairs a load that failed once at
+                // start-up, which otherwise left the page showing empty rows for data
+                // that was still in the store.
+                statsService.refreshIndexes();
                 settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
                     .defaultIfEmpty(OnlineStatsSettings.empty())
                     .subscribe(settings -> {

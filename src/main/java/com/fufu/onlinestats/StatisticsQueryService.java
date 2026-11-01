@@ -183,12 +183,16 @@ public class StatisticsQueryService {
         result.put("todayViews", todayViews);
         result.put("todayVisitors", todayVisitors);
         result.put("online", onlineNow);
-        result.put("articles", stats.officialByPost().size());
+        result.putAll(stats.diagnostics());
+        /* The diagnostics carry their own "articles" (the number of records in memory),
+         * which used to overwrite this one and made the card disagree with the ranking.
+         * These three are written last so they mean exactly one thing each. */
+        result.put("articles", stats.posts().size());
         result.put("trackedArticles", articles.size());
+        result.put("officialPosts", stats.officialByPost().size());
         result.put("days", days.size());
         result.put("today", today);
         result.put("loaded", stats.isLoaded());
-        result.putAll(stats.diagnostics());
         return result;
     }
 
