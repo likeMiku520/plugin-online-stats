@@ -408,9 +408,14 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                     }
                 }
                 // The statistics page is built from its own counters, so a cleared device
-                // has to be taken out of those as well.
-                for (String key : removed) {
-                    statistics += statsService.forgetVisitor(key);
+                // has to be taken out of those as well. Clearing everything goes further
+                // and throws the whole history away, which is what "start over" means.
+                if (all && wantsVisitors) {
+                    statistics += statsService.reset();
+                } else {
+                    for (String key : removed) {
+                        statistics += statsService.forgetVisitor(key);
+                    }
                 }
                 log.info("Cleared {} visitor records, {} messages and {} statistics ({})",
                     visitors, messages, statistics,

@@ -442,7 +442,7 @@ async function loadChatStats() {
   }
   try {
     const { data } = await axios.get(`${api}/maintenance/conversations`, {
-      params: { page: 1, size: 200 },
+      params: { page: 1, size: 20000 },
     })
     conversations.value = data.items ?? []
   } catch (e) {
@@ -523,7 +523,10 @@ async function clearData(what: 'visitors' | 'chat', all: boolean) {
   }
   const label = what === 'chat' ? '聊天记录' : '访客数据'
   const who = all ? '全部访客' : `选中的 ${keys.length} 位访客`
-  if (!window.confirm(`确定要清除${who}的${label}吗？删除后无法恢复。`)) {
+  const warning = all && what !== 'chat'
+    ? '统计页的历史数据会一起清空，之后从零开始。删除后无法恢复。'
+    : '删除后无法恢复。'
+  if (!window.confirm(`确定要清除${who}的${label}吗？${warning}`)) {
     return
   }
   busy.value = true
@@ -730,57 +733,53 @@ onUnmounted(() => {
     </div>
 
     <div class="os-manage">
-      <div class="os-manage__head">
-        <span class="os-manage__hint">已选中 {{ selectedCount }} 位访客</span>
-        <div class="os-manage__tabs">
+      <div class="os-manage__bar">
+        <div class="os-toolbar__segment os-manage__tabs">
           <button
             v-for="tab in manageTabs"
             :key="tab.key"
-            class="os-manage__tab"
-            :class="{ 'is-active': manageTab === tab.key }"
             type="button"
+            :class="{ 'is-active': manageTab === tab.key }"
             @click="manageTab = tab.key"
           >
             {{ tab.title }}
           </button>
         </div>
+        <span class="os-manage__hint">已选中 {{ selectedCount }} 位访客</span>
+        <div class="os-manage__actions">
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--soft"
+            type="button"
+            :disabled="!selectedCount"
+            @click="manageTab === 'visitors' ? exportVisitors(false) : exportChat(false)"
+          >
+            {{ manageTab === 'visitors' ? '导出选中数据' : '导出选中聊天' }}
+          </button>
+          <button
+            class="os-toolbar__refresh"
+            type="button"
+            @click="manageTab === 'visitors' ? exportVisitors(true) : exportChat(true)"
+          >
+            {{ manageTab === 'visitors' ? '导出全部数据' : '导出全部聊天' }}
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy || !selectedCount"
+            @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', false)"
+          >
+            {{ manageTab === 'visitors' ? '清除选中数据' : '清除选中聊天' }}
+          </button>
+          <button
+            class="os-toolbar__refresh os-toolbar__refresh--danger"
+            type="button"
+            :disabled="busy"
+            @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', true)"
+          >
+            {{ manageTab === 'visitors' ? '清除全部数据' : '清除全部聊天' }}
+          </button>
+        </div>
       </div>
-
-      <div class="os-manage__actions">
-        <button
-          class="os-toolbar__refresh os-toolbar__refresh--soft"
-          type="button"
-          :disabled="!selectedCount"
-          @click="manageTab === 'visitors' ? exportVisitors(false) : exportChat(false)"
-        >
-          导出选中
-        </button>
-        <button
-          class="os-toolbar__refresh"
-          type="button"
-          @click="manageTab === 'visitors' ? exportVisitors(true) : exportChat(true)"
-        >
-          导出全部
-        </button>
-        <span class="os-manage__gap" />
-        <button
-          class="os-toolbar__refresh os-toolbar__refresh--danger"
-          type="button"
-          :disabled="busy || !selectedCount"
-          @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', false)"
-        >
-          清除选中
-        </button>
-        <button
-          class="os-toolbar__refresh os-toolbar__refresh--danger"
-          type="button"
-          :disabled="busy"
-          @click="clearData(manageTab === 'visitors' ? 'visitors' : 'chat', true)"
-        >
-          清除全部
-        </button>
-      </div>
-
       <p v-if="manageNote" class="os-manage__note">{{ manageNote }}</p>
     </div>
 
@@ -1670,48 +1669,26 @@ onUnmounted(() => {
 }
 
 .os-manage {
-  display: flex;
-  flex-direction: column;
-  gap: 0.625rem;
   padding: 0.75rem 1rem;
   margin-bottom: 1rem;
   background: #fff;
   border-radius: 0.5rem;
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
 
-  &__head {
+  &__bar {
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem;
     align-items: center;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #f3f4f6;
   }
 
   &__tabs {
-    display: flex;
-    gap: 0.25rem;
-    margin-left: auto;
-    padding: 0.125rem;
-    background: #f3f4f6;
-    border-radius: 0.375rem;
+    flex: none;
   }
 
-  &__tab {
-    padding: 0.25rem 0.75rem;
-    font: inherit;
-    font-size: 0.8125rem;
-    color: #111827;
-    cursor: pointer;
-    background: transparent;
-    border: none;
-    border-radius: 0.25rem;
-
-    &.is-active {
-      color: #0f766e;
-      background: #fff;
-      box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-    }
+  &__hint {
+    font-size: 0.75rem;
+    color: #6b7280;
   }
 
   &__actions {
@@ -1719,11 +1696,7 @@ onUnmounted(() => {
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
-  }
-
-  &__gap {
-    flex: 1;
-    min-width: 1rem;
+    margin-left: auto;
   }
 
   &__hint {

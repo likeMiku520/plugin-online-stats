@@ -382,7 +382,7 @@ describe('the visitor list', () => {
     await wrapper.find('.os-table__check input').setValue(true)
     await flushPromises()
 
-    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('导出选中'))
+    const exportBtn = wrapper.findAll('button').find((b) => b.text().includes('导出选中数据'))
     await exportBtn!.trigger('click')
 
     expect(window.open).toHaveBeenCalledWith(expect.stringContaining('keys=v-1'), '_blank')
@@ -398,7 +398,7 @@ describe('the visitor list', () => {
     await wrapper.find('.os-table__check input').setValue(true)
     await flushPromises()
 
-    const clearBtn = wrapper.findAll('button').find((b) => b.text().includes('清除选中'))
+    const clearBtn = wrapper.findAll('button').find((b) => b.text().includes('清除选中数据'))
     await clearBtn!.trigger('click')
     await flushPromises()
 

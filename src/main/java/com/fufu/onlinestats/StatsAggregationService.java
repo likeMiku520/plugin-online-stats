@@ -848,6 +848,43 @@ public class StatsAggregationService {
         loaded = false;
     }
 
+    /**
+     * Throws away every stored statistic, so counting starts from zero.
+     *
+     * <p>Used by the "clear everything" action: its promise is that nothing from before
+     * is still counted anywhere, which only holds if the day and article totals go too.</p>
+     *
+     * @return how many stored statistics were deleted
+     */
+    public synchronized int reset() {
+        int removed = 0;
+        for (DailyStat day : new ArrayList<>(dailyIndex.values())) {
+            try {
+                client.delete(day).block(Duration.ofSeconds(10));
+                removed++;
+            } catch (Exception e) {
+                log.warn("Failed to delete a daily statistic", e);
+            }
+        }
+        for (ArticleStat article : new ArrayList<>(articleIndex.values())) {
+            try {
+                client.delete(article).block(Duration.ofSeconds(10));
+                removed++;
+            } catch (Exception e) {
+                log.warn("Failed to delete an article statistic", e);
+            }
+        }
+        clear();
+        try {
+            ensureAdjustment(0L);
+        } catch (Exception e) {
+            log.debug("Could not reset the official view adjustment", e);
+        }
+        // The post list is metadata, not a statistic; read it back so the page is usable.
+        reloadPosts();
+        return removed;
+    }
+
     /** Releases the aggregation thread when the plugin stops. */
     public void shutdown() {
         recordExecutor.shutdownNow();

@@ -391,18 +391,44 @@ public class StatisticsQueryService {
         }
     }
 
-    /** The page a device was last seen on, shown by its title when there is one. */
+    /**
+     * The page a device was last seen on: its title, plus the route it lives at so two
+     * pages with the same title stay apart.
+     */
     private static String pageLabel(VisitorRecord.Spec spec) {
         String title = spec.getLastPageTitle();
-        if (title != null && !title.isBlank()) {
-            return title;
-        }
         String url = spec.getLastPageUrl();
-        if (url == null || url.isBlank()) {
+        String route = routeOf(url);
+        String name = title == null || title.isBlank() ? route : title;
+        if (name == null || name.isBlank()) {
             return "未知页面";
         }
-        int at = url.indexOf('?');
-        return at > 0 ? url.substring(0, at) : url;
+        if (route == null || route.isBlank() || route.equals(name)) {
+            return name;
+        }
+        return name + " (" + route + ")";
+    }
+
+    /** The path part of a page address, which is what a reader calls the route. */
+    private static String routeOf(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String value = url;
+        int scheme = value.indexOf("://");
+        if (scheme >= 0) {
+            int slash = value.indexOf('/', scheme + 3);
+            value = slash < 0 ? "/" : value.substring(slash);
+        }
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int hash = value.indexOf('#');
+        if (hash >= 0) {
+            value = value.substring(0, hash);
+        }
+        return value.isBlank() ? "/" : value;
     }
 
     private static long windowStartMillis(int days, String from) {
@@ -597,6 +623,9 @@ public class StatisticsQueryService {
     /** Who contributed one source row, optionally restricted to one kind of visitor. */
     public Map<String, Object> sourceDetail(OnlineStatsSettings settings, int days,
                                             String dimension, String value, Scope scope) {
+        if ("page".equals(dimension)) {
+            return pageDetail(settings, days, value, scope);
+        }
         List<DailyStat> window = window(days, null, null);
         long views = 0;
         Map<String, Long> perVisitor = new LinkedHashMap<>();
@@ -645,6 +674,59 @@ public class StatisticsQueryService {
         result.put("value", value);
         result.put("views", views);
         result.put("visitors", (long) perVisitor.size());
+        result.put("items", visitors);
+        return result;
+    }
+
+    /**
+     * Who was last seen on one page. Pages are not part of the daily counters, so this
+     * row is answered from the retained visitor records instead.
+     */
+    private Map<String, Object> pageDetail(OnlineStatsSettings settings, int days,
+                                           String value, Scope scope) {
+        long fromMs = windowStartMillis(days, null);
+        long toMs = windowEndMillis(null);
+        List<Map<String, Object>> visitors = new ArrayList<>();
+        long views = 0;
+        for (VisitorRecord record : records.list()) {
+            if (record.getSpec() == null || record.getMetadata() == null) {
+                continue;
+            }
+            if (!value.equals(pageLabel(record.getSpec()))) {
+                continue;
+            }
+            boolean bot = isBot(record.getSpec());
+            if (scope == Scope.BOT && !bot) {
+                continue;
+            }
+            if (scope == Scope.HUMAN && bot) {
+                continue;
+            }
+            Long lastSeen = record.getSpec().getLastSeenAt();
+            if (lastSeen != null && (lastSeen < fromMs || lastSeen > toMs)) {
+                continue;
+            }
+            long pageViews = record.getSpec().getPageViewCount() == null ? 0L
+                : record.getSpec().getPageViewCount();
+            views += pageViews;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("visitorKey", record.getMetadata().getName());
+            row.put("views", pageViews);
+            row.put("ip", settings != null && settings.showIpInConsoleOrDefault()
+                ? record.getSpec().getIp() : null);
+            visitors.add(row);
+        }
+        visitors.sort((left, right) -> Long.compare(
+            ((Number) right.get("views")).longValue(),
+            ((Number) left.get("views")).longValue()));
+        if (visitors.size() > 100) {
+            visitors = new ArrayList<>(visitors.subList(0, 100));
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dimension", "page");
+        result.put("value", value);
+        result.put("views", views);
+        result.put("visitors", (long) visitors.size());
         result.put("items", visitors);
         return result;
     }

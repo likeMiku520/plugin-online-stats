@@ -53,11 +53,10 @@ const overview = ref<Overview | null>(null)
 const series = ref<Point[]>([])
 const articles = ref<ArticleRow[]>([])
 const browsers = ref<SourceItem[]>([])
-const devices = ref<SourceItem[]>([])
 const pages = ref<SourceItem[]>([])
 const systems = ref<SourceItem[]>([])
 const referers = ref<SourceItem[]>([])
-const trendDays = ref(90)
+const trendDays = ref(7)
 const articleSort = ref<'views' | 'visitors' | 'today' | 'duration'>('views')
 /** Which visitors every figure on the page is counted over. */
 const scope = ref<'all' | 'human' | 'bot'>('all')
@@ -130,7 +129,7 @@ async function loadAll() {
   // sent with each request instead of being applied to already loaded numbers.
   const filter = { type: scope.value }
   try {
-    const [ov, tr, ar, br, sy, rf, dv, pg] = await Promise.all([
+    const [ov, tr, ar, br, sy, rf, pg] = await Promise.all([
       axios.get(`${api}/statistics/overview`, { params: filter }),
       axios.get(`${api}/statistics/trend`, { params: { ...filter, days: trendDays.value } }),
       axios.get(`${api}/statistics/articles`, {
@@ -146,9 +145,6 @@ async function loadAll() {
         params: { ...filter, dimension: 'referer', days: 30 },
       }),
       axios.get(`${api}/statistics/sources`, {
-        params: { ...filter, dimension: 'device', days: 30 },
-      }),
-      axios.get(`${api}/statistics/sources`, {
         params: { ...filter, dimension: 'page', days: 30 },
       }),
     ])
@@ -158,7 +154,6 @@ async function loadAll() {
     browsers.value = br.data.items || []
     systems.value = sy.data.items || []
     referers.value = rf.data.items || []
-    devices.value = dv.data.items || []
     pages.value = pg.data.items || []
     lastLoadedAt.value = Date.now()
   } catch (e) {
@@ -310,9 +305,9 @@ const emptyHint = computed(() => {
   }
   return '还没有文章页的访问记录。打开任意一篇文章停留十几秒，再回来看这里。'
 })
-/** A page rank shows titles, which can be long; the list keeps them short. */
-function pageLabel(name: string): string {
-  return name.length > 18 ? `${name.slice(0, 18)}…` : name
+/** The ranking lists only the fifteen busiest rows, so the bars stay readable. */
+function top(items: SourceItem[]): SourceItem[] {
+  return items.slice(0, 15)
 }
 
 const maxSourceViews = computed(() =>
@@ -465,12 +460,11 @@ onUnmounted(() => {
       <StatsChart :series="series" metric="views" />
     </section>
 
-    <div class="os-scroll">
-      <div class="os-grid">
+    <div class="os-grid">
       <section class="os-panel">
         <h3>浏览器来源</h3>
         <ul class="os-bars">
-          <li v-for="item in browsers" :key="item.name" @click="openSource('browser', item.name)">
+          <li v-for="item in top(browsers)" :key="item.name" @click="openSource('browser', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
             <span class="os-bars__value">{{ item.views }}</span>
@@ -482,7 +476,7 @@ onUnmounted(() => {
       <section class="os-panel">
         <h3>操作系统来源</h3>
         <ul class="os-bars">
-          <li v-for="item in systems" :key="item.name" @click="openSource('system', item.name)">
+          <li v-for="item in top(systems)" :key="item.name" @click="openSource('system', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
             <span class="os-bars__value">{{ item.views }}</span>
@@ -494,7 +488,7 @@ onUnmounted(() => {
       <section class="os-panel">
         <h3>来源站点</h3>
         <ul class="os-bars">
-          <li v-for="item in referers" :key="item.name" @click="openSource('referer', item.name)">
+          <li v-for="item in top(referers)" :key="item.name" @click="openSource('referer', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
             <span class="os-bars__value">{{ item.views }}</span>
@@ -504,29 +498,21 @@ onUnmounted(() => {
       </section>
 
       <section class="os-panel">
-        <h3>设备来源</h3>
-        <ul class="os-bars">
-          <li v-for="item in devices" :key="item.name">
-            <span class="os-bars__name">{{ item.name }}</span>
-            <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
-            <span class="os-bars__value">{{ item.views }}</span>
-          </li>
-          <li v-if="!devices.length" class="os-bars__empty">暂无数据</li>
-        </ul>
-      </section>
-
-      <section class="os-panel">
         <h3>页面地址</h3>
         <ul class="os-bars">
-          <li v-for="item in pages" :key="item.name" :title="item.name">
-            <span class="os-bars__name" :title="item.name">{{ pageLabel(item.name) }}</span>
+          <li
+            v-for="item in top(pages)"
+            :key="item.name"
+            :title="item.name"
+            @click="openSource('page', item.name)"
+          >
+            <span class="os-bars__name" :title="item.name">{{ item.name }}</span>
             <span class="os-bars__bar"><i :style="{ width: barWidth(item.views) }" /></span>
             <span class="os-bars__value">{{ item.views }}</span>
           </li>
           <li v-if="!pages.length" class="os-bars__empty">暂无数据</li>
         </ul>
       </section>
-      </div>
     </div>
 
     <section class="os-panel">
@@ -802,7 +788,7 @@ onUnmounted(() => {
 
 .os-mini {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
   gap: 1rem;
   margin-top: 0.75rem;
   padding-top: 0.75rem;
@@ -816,26 +802,10 @@ onUnmounted(() => {
   }
 }
 
-.os-scroll {
-  overflow-x: auto;
-  padding-bottom: 0.25rem;
-  scrollbar-width: thin;
-
-  &::-webkit-scrollbar {
-    height: 0.5rem;
-  }
-
-  &::-webkit-scrollbar-thumb {
-    background: #d1d5db;
-    border-radius: 9999px;
-  }
-}
-
 .os-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(19rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
   gap: 1rem;
-  min-width: max-content;
 
   .os-panel {
     margin-bottom: 1rem;
@@ -849,7 +819,7 @@ onUnmounted(() => {
 
   li {
     display: grid;
-    grid-template-columns: 7rem 1fr 3rem;
+    grid-template-columns: 9.5rem 1fr 3rem;
     gap: 0.5rem;
     align-items: center;
     padding: 0.25rem 0.25rem;
