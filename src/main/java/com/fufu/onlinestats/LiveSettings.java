@@ -59,6 +59,12 @@ public class LiveSettings {
         if (hit != null && now - hit.at() < CACHE_MILLIS) {
             return hit.values();
         }
+        if (reactor.core.scheduler.Schedulers.isInNonBlockingThread()) {
+            /* Only a background read may block. A request thread takes the previous
+             * value — a couple of seconds out of date beats an exception that the caller
+             * turns into "nothing was filled in". */
+            return hit == null ? Optional.empty() : hit.values();
+        }
         Optional<Map<String, String>> fresh = readFromFetcher(group);
         if (fresh.isEmpty()) {
             fresh = readFromConfigMap(configMapName, group);

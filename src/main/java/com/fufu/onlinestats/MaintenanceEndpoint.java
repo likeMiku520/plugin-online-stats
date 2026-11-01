@@ -351,7 +351,15 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             })
             .onErrorResume(e -> Mono.empty())
             .defaultIfEmpty(Map.of())
-            .flatMap(body -> {
+            .flatMap(body -> Mono.fromCallable(() -> applyClear(body))
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic()))
+            .flatMap(payload -> payload.containsKey("error")
+                ? ServerResponse.badRequest().bodyValue(payload)
+                : ServerResponse.ok().bodyValue(payload));
+    }
+
+    /** Deletes what was asked for and reports how much went. Blocks, so call on a worker. */
+    private Map<String, Object> applyClear(Map<String, Object> body) {
                 String what = String.valueOf(body.getOrDefault("what", "both"));
                 boolean all = Boolean.TRUE.equals(body.get("all"));
                 List<String> keys = new ArrayList<>();
@@ -368,7 +376,9 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                     keys.add(String.valueOf(single));
                 }
                 if (!all && keys.isEmpty()) {
-                    return ServerResponse.badRequest().bodyValue(Map.of("error", "没有选中访客"));
+                    Map<String, Object> refused = new LinkedHashMap<>();
+                    refused.put("error", "没有选中访客");
+                    return refused;
                 }
 
                 int visitors = 0;
@@ -424,8 +434,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                 payload.put("ok", true);
                 payload.put("visitors", visitors);
                 payload.put("messages", messages);
-                return ServerResponse.ok().bodyValue(payload);
-            });
+                return payload;
     }
     /** Whether that device is currently reporting a heartbeat. */
     private boolean isOnline(String key) {

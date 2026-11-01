@@ -287,7 +287,11 @@ public class StatsAggregationService {
                 return;
             }
             stat.getSpec().setOfficialViews(value);
-            saveArticle(stat);
+            /* This runs inside a reactive stream whose events arrive on a Netty thread,
+             * and the store write blocks. Hand it to a worker instead of blocking the
+             * event loop — that is what produced "block() ... not supported in thread
+             * reactor-tcp-nio" and lost the write. */
+            saveOffThread(stat);
         }, error -> log.debug("Failed to read official counters: {}", error.toString()),
             () -> {
                 officialViewsTotal = total[0];
@@ -816,6 +820,23 @@ public class StatsAggregationService {
             }
         }
         log.debug("Gave up saving article stat {} after three attempts", name);
+    }
+
+    /**
+     * Stores one statistic away from the calling thread.
+     *
+     * <p>The reactive client hands its events to whoever subscribed, which for a request
+     * path is a Netty event loop. Blocking there is refused outright, so any write that
+     * originates from a stream is moved to a worker thread.</p>
+     */
+    private void saveOffThread(ArticleStat stat) {
+        reactor.core.scheduler.Schedulers.boundedElastic().schedule(() -> {
+            try {
+                saveArticle(stat);
+            } catch (Exception e) {
+                noteStatSaveFailure(e);
+            }
+        });
     }
 
     private void noteStatSaveFailure(Exception error) {
