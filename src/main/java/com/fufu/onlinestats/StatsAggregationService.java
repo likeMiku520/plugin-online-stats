@@ -286,12 +286,11 @@ public class StatsAggregationService {
             if (Long.valueOf(value).equals(stat.getSpec().getOfficialViews())) {
                 return;
             }
-            stat.getSpec().setOfficialViews(value);
             /* This runs inside a reactive stream whose events arrive on a Netty thread,
-             * and the store write blocks. Hand it to a worker instead of blocking the
-             * event loop — that is what produced "block() ... not supported in thread
-             * reactor-tcp-nio" and lost the write. */
-            saveOffThread(stat);
+             * where the store write is refused outright. Hand it to a worker, which also
+             * re-reads the latest version first so it cannot collide with the heartbeat
+             * writer over the same article. */
+            saveOffThread(postName, value);
         }, error -> log.debug("Failed to read official counters: {}", error.toString()),
             () -> {
                 officialViewsTotal = total[0];
@@ -793,6 +792,7 @@ public class StatsAggregationService {
     public synchronized void saveArticle(ArticleStat stat) {
         String name = stat.getMetadata().getName();
         boolean isNew = !articleIndex.containsKey(name);
+        Exception lastError = null;
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 ArticleStat result = isNew
@@ -801,14 +801,14 @@ public class StatsAggregationService {
                 articleIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
-                noteStatSaveFailure(e);
+                lastError = e;
                 // Same rule as the daily record: the counters in memory must not be
                 // dropped because somebody else wrote this article first.
+                settleBeforeRetry(attempt);
                 ArticleStat existing = fetchArticleQuietly(name);
                 if (existing == null) {
                     if (isNew) {
-                        log.debug("Failed to create article stat {}", name, e);
-                        return;
+                        break;
                     }
                     articleIndex.remove(name);
                     isNew = true;
@@ -819,7 +819,18 @@ public class StatsAggregationService {
                 isNew = false;
             }
         }
-        log.debug("Gave up saving article stat {} after three attempts", name);
+        noteStatSaveFailure(lastError == null ? new IllegalStateException("save failed")
+            : lastError);
+        log.warn("Gave up saving article stat {}", name);
+    }
+
+    /** A short pause lets whoever got there first finish their own update. */
+    private static void settleBeforeRetry(int attempt) {
+        try {
+            Thread.sleep(20L * (attempt + 1));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
@@ -829,10 +840,21 @@ public class StatsAggregationService {
      * path is a Netty event loop. Blocking there is refused outright, so any write that
      * originates from a stream is moved to a worker thread.</p>
      */
-    private void saveOffThread(ArticleStat stat) {
+    private void saveOffThread(String postName, long value) {
         reactor.core.scheduler.Schedulers.boundedElastic().schedule(() -> {
             try {
-                saveArticle(stat);
+                ArticleStat current = fetchArticleQuietly(postName);
+                if (current == null || current.getSpec() == null) {
+                    return;
+                }
+                if (Long.valueOf(value).equals(nvl(current.getSpec().getOfficialViews()))) {
+                    return;
+                }
+                /* Only this one field is ours to write here. Starting from the version
+                 * that is actually stored keeps the heartbeat's counters intact and
+                 * stops the two writers from fighting over the same row. */
+                current.getSpec().setOfficialViews(value);
+                saveArticle(current);
             } catch (Exception e) {
                 noteStatSaveFailure(e);
             }
@@ -883,6 +905,17 @@ public class StatsAggregationService {
         if (into == null || from == null) {
             return;
         }
+        into.setOfficialViews(Math.max(nvl(into.getOfficialViews()),
+            nvl(from.getOfficialViews())));
+        if (into.getTitle() == null) {
+            into.setTitle(from.getTitle());
+        }
+        if (into.getSlug() == null) {
+            into.setSlug(from.getSlug());
+        }
+        if (into.getPermalink() == null) {
+            into.setPermalink(from.getPermalink());
+        }
         into.setViews(Math.max(nvl(into.getViews()), nvl(from.getViews())));
         into.setVisitors(Math.max(nvl(into.getVisitors()), nvl(from.getVisitors())));
         into.setTotalOnlineMs(Math.max(nvl(into.getTotalOnlineMs()),
@@ -909,6 +942,7 @@ public class StatsAggregationService {
     public synchronized void saveDaily(DailyStat stat) {
         String name = stat.getMetadata().getName();
         boolean isNew = !dailyIndex.containsKey(name);
+        Exception lastError = null;
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
                 DailyStat result = isNew
@@ -917,7 +951,8 @@ public class StatsAggregationService {
                 dailyIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
-                noteStatSaveFailure(e);
+                lastError = e;
+                settleBeforeRetry(attempt);
                 /* The write carries counters accumulated in memory, so giving up loses
                  * them for good. A conflict means someone else wrote this day (another
                  * instance, or a request that finished first): take their version and
@@ -925,8 +960,7 @@ public class StatsAggregationService {
                 DailyStat existing = fetchQuietly(name);
                 if (existing == null) {
                     if (isNew) {
-                        log.debug("Failed to create daily stat {}", name, e);
-                        return;
+                        break;
                     }
                     dailyIndex.remove(name);
                     isNew = true;
@@ -937,7 +971,9 @@ public class StatsAggregationService {
                 isNew = false;
             }
         }
-        log.debug("Gave up saving daily stat {} after three attempts", name);
+        noteStatSaveFailure(lastError == null ? new IllegalStateException("save failed")
+            : lastError);
+        log.warn("Gave up saving daily stat {}", name);
     }
 
     private DailyStat fetchQuietly(String name) {
