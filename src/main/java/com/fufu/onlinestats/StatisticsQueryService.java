@@ -127,56 +127,48 @@ public class StatisticsQueryService {
         String today = LocalDate.now(ZoneId.systemDefault()).format(DAY);
         Set<String> accepted = acceptedKeys(scope);
 
+        /* These totals follow the daily records, which count every page on the site. The
+         * article ranking below still covers articles only, so the two are deliberately
+         * different: a visitor reading the home page is a visit, just not an article one. */
         long views = 0;
         long visitors = 0;
-        long officialViews = 0;
         long duration = 0;
         long todayViews = 0;
         long todayVisitors = 0;
-        for (ArticleStat article : articles) {
-            ArticleStat.Spec spec = article.getSpec();
-            if (!scope.filtered()) {
-                views += nvl(spec.getViews());
-                visitors += nvl(spec.getVisitors());
-                duration += nvl(spec.getTotalOnlineMs());
-                todayViews += nvl(spec.getTodayViews());
-                todayVisitors += nvl(spec.getTodayVisitors());
-            } else {
+        Set<String> seen = new HashSet<>();
+        for (DailyStat day : days) {
+            DailyStat.Spec spec = day.getSpec();
+            boolean isToday = today.equals(spec.getDate());
+            if (scope.filtered()) {
                 views += sumAccepted(spec.getVisitorViews(), accepted);
-                visitors += countAccepted(spec.getVisitorViews(), accepted);
                 duration += sumAccepted(spec.getVisitorDurations(), accepted);
-            }
-            officialViews += nvl(spec.getOfficialViews());
-        }
-        if (scope.filtered()) {
-            for (DailyStat day : days) {
-                if (!today.equals(day.getSpec().getDate())) {
-                    continue;
+                if (isToday) {
+                    todayViews += sumAccepted(spec.getVisitorViews(), accepted);
+                    todayVisitors += countAccepted(spec.getVisitorViews(), accepted);
                 }
-                todayViews += sumAccepted(day.getSpec().getVisitorViews(), accepted);
-                todayVisitors += countAccepted(day.getSpec().getVisitorViews(), accepted);
+                for (String key : spec.getVisitorViews().keySet()) {
+                    if (accepted.contains(key)) {
+                        seen.add(key);
+                    }
+                }
+            } else {
+                views += nvl(spec.getViews());
+                duration += nvl(spec.getTotalOnlineMs());
+                if (isToday) {
+                    todayViews += nvl(spec.getViews());
+                    todayVisitors += nvl(spec.getVisitors());
+                }
+                seen.addAll(spec.getVisitorViews().keySet());
             }
         }
+        visitors = seen.size();
         // The headline view number is Halo's own total. A configured correction is written
         // into Halo's counter data by the aggregation service, so it is not added again
         // here; these fields only report what was applied.
         long adjustment = settings.officialViewsAdjustmentOrDefault();
         long officialTotal = stats.officialViewsTotal();
 
-        long totalVisitors = 0;
-        if (!scope.filtered()) {
-            totalVisitors = uniqueVisitors(days);
-        } else {
-            Set<String> distinct = new HashSet<>();
-            for (DailyStat day : days) {
-                for (String key : day.getSpec().getVisitorViews().keySet()) {
-                    if (accepted.contains(key)) {
-                        distinct.add(key);
-                    }
-                }
-            }
-            totalVisitors = distinct.size();
-        }
+        long totalVisitors = seen.size();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("scope", scope.name().toLowerCase(java.util.Locale.ROOT));
         result.put("views", views);
@@ -276,7 +268,59 @@ public class StatisticsQueryService {
     public Map<String, Object> sources(OnlineStatsSettings settings, int days,
                                        String dimension, String from, String to,
                                        Scope scope) {
+        if ("page".equals(dimension)) {
+            return pagesFromDaily(days, scope);
+        }
         return sourcesFromRecords(settings, days, dimension, from, to, scope);
+    }
+
+    /**
+     * The page ranking, taken from the daily counters. Every page view writes there, so
+     * a device that read five pages contributes five rows instead of only its last one.
+     */
+    private Map<String, Object> pagesFromDaily(int days, Scope scope) {
+        List<DailyStat> window = window(days, null, null);
+        Map<String, Long> views = new LinkedHashMap<>();
+        Map<String, List<String>> visitors = new LinkedHashMap<>();
+        for (DailyStat day : window) {
+            day.getSpec().pagesOrEmpty().forEach((key, value) -> {
+                views.merge(key, value == null ? 0L : value, Long::sum);
+                List<String> keys = visitors.computeIfAbsent(key, ignored -> new ArrayList<>());
+                List<String> tracked = day.getSpec().getSourceVisitors()
+                    .get(dimensionKey("page", key));
+                if (tracked != null) {
+                    for (String visitorKey : tracked) {
+                        if (!keys.contains(visitorKey)) {
+                            keys.add(visitorKey);
+                        }
+                    }
+                }
+            });
+        }
+        if (scope.filtered()) {
+            Set<String> accepted = acceptedKeys(scope);
+            views.keySet().removeIf(key -> {
+                List<String> keys = visitors.get(key);
+                return keys == null || keys.stream().noneMatch(accepted::contains);
+            });
+            visitors.forEach((key, keys) -> keys.removeIf(visitorKey -> !accepted.contains(visitorKey)));
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        views.entrySet().stream()
+            .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+            .forEach(entry -> {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("name", entry.getKey());
+                item.put("views", entry.getValue());
+                item.put("visitors", (long) visitors.getOrDefault(entry.getKey(), List.of()).size());
+                items.add(item);
+            });
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dimension", "page");
+        result.put("items", items);
+        result.put("totalViews", items.stream()
+            .mapToLong(item -> ((Number) item.get("views")).longValue()).sum());
+        return result;
     }
 
     public List<Map<String, Object>> articleList(OnlineStatsSettings settings, String sort,
@@ -396,17 +440,8 @@ public class StatisticsQueryService {
      * pages with the same title stay apart.
      */
     private static String pageLabel(VisitorRecord.Spec spec) {
-        String title = spec.getLastPageTitle();
-        String url = spec.getLastPageUrl();
-        String route = routeOf(url);
-        String name = title == null || title.isBlank() ? route : title;
-        if (name == null || name.isBlank()) {
-            return "未知页面";
-        }
-        if (route == null || route.isBlank() || route.equals(name)) {
-            return name;
-        }
-        return name + " (" + route + ")";
+        return StatsAggregationService.pageKey(spec.getLastPageTitle(),
+            spec.getLastPageUrl());
     }
 
     /** The path part of a page address, which is what a reader calls the route. */
@@ -623,9 +658,6 @@ public class StatisticsQueryService {
     /** Who contributed one source row, optionally restricted to one kind of visitor. */
     public Map<String, Object> sourceDetail(OnlineStatsSettings settings, int days,
                                             String dimension, String value, Scope scope) {
-        if ("page".equals(dimension)) {
-            return pageDetail(settings, days, value, scope);
-        }
         List<DailyStat> window = window(days, null, null);
         long views = 0;
         Map<String, Long> perVisitor = new LinkedHashMap<>();
@@ -634,6 +666,7 @@ public class StatisticsQueryService {
             Map<String, Long> map = switch (dimension) {
                 case "system" -> day.getSpec().getSystems();
                 case "referer" -> day.getSpec().getReferrers();
+                case "page" -> day.getSpec().pagesOrEmpty();
                 default -> day.getSpec().getBrowsers();
             };
             Long count = map.get(value);

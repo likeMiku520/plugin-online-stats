@@ -50,6 +50,29 @@ public class DailyStat extends AbstractExtension {
         /** Post name to view count for that day. */
         private Map<String, Long> posts = new LinkedHashMap<>();
 
+        /** Page name (title plus route) to view count, covering every page not just posts. */
+        private Map<String, Long> pages = new LinkedHashMap<>();
+
+        /** Visitor key to the time that device spent that day, so a filtered view can
+         * report reading time instead of only counting visits. */
+        private Map<String, Long> visitorDurations = new LinkedHashMap<>();
+
+        /** The page counters, never null, even for a day written before pages existed. */
+        public Map<String, Long> pagesOrEmpty() {
+            if (pages == null) {
+                pages = new LinkedHashMap<>();
+            }
+            return pages;
+        }
+
+        /** The reading time per device, never null. */
+        public Map<String, Long> durationsOrEmpty() {
+            if (visitorDurations == null) {
+                visitorDurations = new LinkedHashMap<>();
+            }
+            return visitorDurations;
+        }
+
         /** Visitor key to the IP that was seen that day. */
         private Map<String, String> visitorIps = new LinkedHashMap<>();
 

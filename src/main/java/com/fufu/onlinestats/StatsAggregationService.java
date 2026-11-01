@@ -454,11 +454,14 @@ public class StatsAggregationService {
         lastHeartbeatUrl = visitor.getPageUrl();
         Post post = resolvePost(visitor.getPostName(), visitor.getPageUrl());
         if (post == null) {
+            /* Not an article. The visit still happened, so it is counted as a page view;
+             * only the per-article total has nothing to add to. Dropping these was why
+             * the dashboard never matched what the site actually served. */
             unresolvedHeartbeats++;
-            return;
         }
-        String postName = post.getMetadata().getName();
-        String pageKey = visitor.getKey() + "|" + postName + "|" + visitor.getPageUrl();
+        String postName = post == null ? null : post.getMetadata().getName();
+        String pageKey = visitor.getKey() + "|" + (postName == null ? "page" : postName)
+            + "|" + visitor.getPageUrl();
         boolean newView = !pageKey.equals(lastCountedPage.get(visitor.getKey()));
         if (newView) {
             if (lastCountedPage.size() > MAX_VISITOR_KEYS) {
@@ -468,7 +471,7 @@ public class StatsAggregationService {
         }
 
         long durationDelta = 0L;
-        String durationKey = visitor.getKey() + "|" + postName;
+        String durationKey = visitor.getKey() + "|" + (postName == null ? "page" : postName);
         Long previousBeat = lastHeartbeatAt.get(durationKey);
         if (previousBeat != null) {
             long delta = now - previousBeat;
@@ -492,10 +495,12 @@ public class StatsAggregationService {
 
         updateDaily(daily, date, postName, visitor, browser, system, referer,
             durationDelta, dayView, settings);
-        // Read the day back so today's per-article numbers include this heartbeat even
-        // when the day record was just created above.
-        updateArticle(post, visitor, browser, system, referer, durationDelta, newView,
-            day(date), settings);
+        if (post != null) {
+            // Read the day back so today's per-article numbers include this heartbeat
+            // even when the day record was just created above.
+            updateArticle(post, visitor, browser, system, referer, durationDelta, newView,
+                day(date), settings);
+        }
     }
 
     private void updateDaily(DailyStat existing, String date, String postName,
@@ -513,9 +518,13 @@ public class StatsAggregationService {
             stat.getSpec().setTotalOnlineMs(0L);
         }
         DailyStat.Spec spec = stat.getSpec();
+        String pageName = pageKeyOf(visitor);
         if (view) {
             spec.setViews(nvl(spec.getViews()) + 1);
-            spec.getPosts().merge(postName, 1L, Long::sum);
+            if (postName != null) {
+                spec.getPosts().merge(postName, 1L, Long::sum);
+            }
+            spec.pagesOrEmpty().merge(pageName, 1L, Long::sum);
             spec.getVisitorViews().merge(visitor.getKey(), 1L, Long::sum);
             spec.getBrowsers().merge(browser, 1L, Long::sum);
             spec.getSystems().merge(system, 1L, Long::sum);
@@ -523,9 +532,11 @@ public class StatsAggregationService {
             trackSourceVisitor(spec, "browser", browser, visitor.getKey());
             trackSourceVisitor(spec, "system", system, visitor.getKey());
             trackSourceVisitor(spec, "referer", referer, visitor.getKey());
+            trackSourceVisitor(spec, "page", pageName, visitor.getKey());
         }
         if (durationDelta > 0) {
             spec.setTotalOnlineMs(nvl(spec.getTotalOnlineMs()) + durationDelta);
+            spec.durationsOrEmpty().merge(visitor.getKey(), durationDelta, Long::sum);
         }
         spec.setVisitors((long) spec.getVisitorViews().size());
         if (settings.showIpInConsoleOrDefault() && visitor.getIp() != null) {
@@ -535,6 +546,8 @@ public class StatsAggregationService {
         trimLong(spec.getSystems());
         trimLong(spec.getReferrers());
         trimLong(spec.getPosts());
+        trimLong(spec.pagesOrEmpty());
+        trimLong(spec.durationsOrEmpty());
         trimLong(spec.getVisitorViews());
         trimString(spec.getVisitorIps());
         saveDaily(stat);
@@ -614,6 +627,47 @@ public class StatsAggregationService {
             return Math.max(fromDaily, stored);
         }
         return fromDaily;
+    }
+
+    /**
+     * How one page is named in the counters: its title, plus the route it lives at so
+     * two pages sharing a title stay apart.
+     */
+    public static String pageKeyOf(OnlineVisitor visitor) {
+        return pageKey(visitor.getPageTitle(), visitor.getPageUrl());
+    }
+
+    public static String pageKey(String title, String url) {
+        String route = routeOf(url);
+        String name = title == null || title.isBlank() ? route : title;
+        if (name == null || name.isBlank()) {
+            return "未知页面";
+        }
+        if (route == null || route.isBlank() || route.equals(name)) {
+            return name;
+        }
+        return name + " (" + route + ")";
+    }
+
+    private static String routeOf(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String value = url;
+        int scheme = value.indexOf("://");
+        if (scheme >= 0) {
+            int slash = value.indexOf('/', scheme + 3);
+            value = slash < 0 ? "/" : value.substring(slash);
+        }
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int hash = value.indexOf('#');
+        if (hash >= 0) {
+            value = value.substring(0, hash);
+        }
+        return value.isBlank() ? "/" : value;
     }
 
     private static int countTodayVisitors(ArticleStat.Spec spec, DailyStat daily) {

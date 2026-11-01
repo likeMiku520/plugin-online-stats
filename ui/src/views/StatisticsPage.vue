@@ -295,15 +295,12 @@ const emptyHint = computed(() => {
   if (!ov.loaded) {
     return '插件正在加载数据，稍等几秒。'
   }
-  if (ov.posts === 0) {
-    return '没有读取到已发布的文章，插件无法把访问归到具体文章上。请确认博客里至少有已发布的文章，然后刷新。'
-  }
-  if ((ov.unresolvedHeartbeats ?? 0) > 0 && ov.articles === 0) {
-    return `已收到 ${ov.unresolvedHeartbeats} 次心跳，但都没有匹配到文章。最近一次上报的地址是 ${
+  if ((ov.unresolvedHeartbeats ?? 0) > 0) {
+    return `已收到 ${ov.unresolvedHeartbeats} 次心跳，其中一部分没能对应到文章。最近一次上报的地址是 ${
       ov.lastHeartbeatUrl || '未知'
-    }。统计只记录文章详情页，首页和归档页不计入；如果这是文章页，说明文章链接与插件记录的对不上。`
+    }。这些访问仍然计入总数和页面排行，只是不会出现在文章排行里。`
   }
-  return '还没有文章页的访问记录。打开任意一篇文章停留十几秒，再回来看这里。'
+  return '还没有访问记录。打开任意页面停留十几秒，再回来看这里。'
 })
 /** The ranking lists only the fifteen busiest rows, so the bars stay readable. */
 function top(items: SourceItem[]): SourceItem[] {
@@ -517,7 +514,7 @@ onUnmounted(() => {
 
     <section class="os-panel">
       <div class="os-panel__head">
-        <h3>文章排行</h3>
+        <h3>文章排行<small class="os-panel__note">只统计文章页，总数包含所有页面</small></h3>
         <div class="os-seg">
           <button
             v-for="option in [
@@ -772,6 +769,13 @@ onUnmounted(() => {
     align-items: center;
     justify-content: space-between;
     margin-bottom: 0.75rem;
+  }
+
+  &__note {
+    margin-left: 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    color: #9ca3af;
   }
 
   h3 {
