@@ -265,8 +265,9 @@
       'color:#fff;cursor:pointer;background:var(--primary,#39C5BB);border:0;border-radius:.5rem}',
       '.oschat-send:disabled{cursor:not-allowed;opacity:.55}',
       '.oschat-break{flex:none;padding:.5rem .75rem;font-family:inherit;font-size:.8125rem;',
-      'color:#4b5563;cursor:pointer;background:#fff;border:1px solid #e5e7eb;border-radius:.5rem}',
-      '.oschat-break:hover{background:#f8fafc}',
+      'color:inherit;cursor:pointer;background:rgba(15,23,42,.03);',
+      'border:1px solid rgba(15,23,42,.12);border-radius:.5rem;transition:background .2s ease}',
+      '.oschat-break:hover{background:rgba(15,23,42,.08)}',
       '.oschat-note{display:none;padding:0 1rem .625rem;font-size:.6875rem;color:#dc2626}',
       /* Same shape as the theme's own floating buttons, but on a solid card surface
        * rather than a translucent one: the solid colour is legible over any banner.
@@ -282,13 +283,19 @@
       'text-align:center;background:#ef4444;border-radius:9999px}',
       '@media (min-width:769px){.oschat-card{right:1rem;bottom:1rem;width:20rem;',
       'max-height:60vh;animation:oschat-up .28s ease-out}}',
-      '@media (max-width:768px){.oschat-card{top:0;left:0;right:0;height:33.333vh;',
-      'max-height:33.333vh;border-radius:0 0 .75rem .75rem;animation:oschat-down .28s ease-out}}',
+      '@media (max-width:768px){.oschat-card{top:0;left:0;right:0;',
+      'height:40vh;height:40dvh;max-height:40vh;max-height:40dvh;',
+      'border-radius:0 0 .75rem .75rem;',
+      'animation:oschat-down .28s ease-out;will-change:height,transform}}',
       /* Full height, driven by the drag handle. The transition runs on the class change
        * only; while a finger is dragging, the script switches it off. */
-      '.oschat-card.is-full{height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;',
-      'border-radius:0}',
-      '@media (max-width:768px){.oschat-card{transition:height .22s ease, border-radius .22s ease}}',
+      '.oschat-card.is-full{height:100vh;height:100dvh;',
+      'max-height:100vh;max-height:100dvh;border-radius:0}',
+      '@media (max-width:768px){.oschat-card{transition:height .28s cubic-bezier(.4,0,.2,1),',
+      'border-radius .28s cubic-bezier(.4,0,.2,1)}}',
+      /* The newest message must be readable in full, so the thread keeps a little room
+       * under the last bubble instead of ending flush against the input. */
+      '.oschat-body{padding-bottom:.5rem}',
       '.oschat-grip{display:none}',
       '@media (max-width:768px){.oschat-grip{display:flex;flex:none;align-items:center;',
       'justify-content:center;height:1.5rem;cursor:grab;touch-action:none;',
@@ -307,12 +314,17 @@
       ':root.dark .oschat-text{color:rgba(255,255,255,.72)}',
       ':root.dark .oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
       'border-color:rgba(255,255,255,.14)}',
+      ':root.dark .oschat-break{color:#e2e8f0;background:rgba(255,255,255,.06);',
+      'border-color:rgba(255,255,255,.14)}',
+      ':root.dark .oschat-break:hover{background:rgba(255,255,255,.12)}',
       ':root.dark .oschat-foot{border-top-color:rgba(255,255,255,.08)}',
       '@media (prefers-color-scheme:dark){.oschat-card{background:var(--card-bg,#1e293b);',
       'color:#e2e8f0}.oschat-launcher{background-color:var(--card-bg,#1e293b)}',
       '.oschat-bubble{background:rgba(255,255,255,.08)}.oschat-text{color:rgba(255,255,255,.72)}',
       '.oschat-input{color:#e2e8f0;background:rgba(255,255,255,.06);',
-      'border-color:rgba(255,255,255,.14)}.oschat-foot{border-top-color:rgba(255,255,255,.08)}}'
+      'border-color:rgba(255,255,255,.14)}.oschat-foot{border-top-color:rgba(255,255,255,.08)}',
+      '.oschat-break{color:#e2e8f0;background:rgba(255,255,255,.06);',
+      'border-color:rgba(255,255,255,.14)}}'
     ].join('');
     (document.head || document.documentElement).appendChild(style);
   }
@@ -403,7 +415,7 @@
      * so the conversation moves instead of the article behind it. */
     var grip = chatElement('div', 'oschat-grip');
     grip.setAttribute('role', 'button');
-    grip.setAttribute('aria-label', '向下拖动可全屏');
+    grip.setAttribute('aria-label', '向下拖动展开，向上拖动收起');
     grip.appendChild(chatElement('span', 'oschat-grip__bar'));
     attachGripDrag(card, grip);
 
@@ -499,38 +511,178 @@
    * code path; the sheet follows the finger, and past a short distance it snaps to full
    * height instead of stopping half way.
    */
+  /*
+   * The sheet follows the finger. Pulling the handle down grows it from the resting
+   * height until it fills the screen; pulling it back up shrinks it, and letting go after
+   * a real upward pull puts it away so the floating button comes back. Nothing jumps:
+   * the height tracks the pointer frame by frame, and every release animates to its
+   * destination on the same curve the theme uses for its own floating controls.
+   */
+  /*
+   * The sheet follows the finger in both directions.
+   *
+   * Pulling down grows it from the resting height to a full screen; pulling up shrinks
+   * it back. From full a pull upward returns it to the resting height first, and only a
+   * further pull upward from there puts it away, so letting go never skips a step.
+   *
+   * The height is written together with max-height: the stylesheet clamps the sheet to
+   * its resting size, and without lifting that clamp the inline height had no effect —
+   * which is why the sheet used to jump straight to full on release.
+   */
   function attachGripDrag(card, grip) {
+    var DRAG_CURVE = 'height .28s cubic-bezier(.4, 0, .2, 1), '
+      + 'transform .28s cubic-bezier(.4, 0, .2, 1), '
+      + 'opacity .28s cubic-bezier(.4, 0, .2, 1), '
+      + 'border-radius .28s cubic-bezier(.4, 0, .2, 1)';
+    var SETTLE_MS = 290;
     var startY = 0;
     var startHeight = 0;
-    var expandedAtStart = false;
+    var fullAtStart = false;
     var dragging = false;
-    /* A drag ends with a click on the handle, so the click handler has to know whether
-     * the pointer really moved before it flips the sheet. */
     var suppressClick = false;
+    var pendingY = 0;
+    var frame = 0;
 
-    function settle(open) {
-      card.classList.toggle('is-full', open);
+    function viewport() {
+      return window.innerHeight || document.documentElement.clientHeight || 640;
+    }
+
+    /** The height the sheet rests at: 40% of the screen. */
+    function restingHeight() {
+      return Math.round(viewport() * 0.4);
+    }
+
+    /** A full screen occupies the whole viewport. */
+    function availableHeight() {
+      return viewport();
+    }
+
+    /** How far the finger has to travel before the gesture counts. */
+    function threshold() {
+      return Math.max(40, Math.round(viewport() * 0.08));
+    }
+
+    function clampHeight(value) {
+      return Math.max(0, Math.min(availableHeight(), Math.round(value)));
+    }
+
+    /** Height and its clamp move together, or the stylesheet wins. */
+    function applyHeight(value) {
+      var next = clampHeight(value);
+      card.style.maxHeight = next + 'px';
+      card.style.height = next + 'px';
+    }
+
+    function clearInline() {
       card.style.height = '';
+      card.style.maxHeight = '';
+      card.style.transform = '';
+      card.style.opacity = '';
+    }
+
+    function settleClass(expanded) {
+      card.classList.toggle('is-full', expanded);
+      clearInline();
       card.style.transition = '';
-      /* Only a card that fills the screen takes the page away: the short sheet leaves
-       * the article scrollable behind it. */
-      lockPageScroll(open);
+      lockPageScroll(expanded);
+    }
+
+    function animateTo(height, expanded, done) {
+      card.style.transition = DRAG_CURVE;
+      // Force a style resolution so the transition applies to this change too.
+      void card.offsetHeight;
+      applyHeight(height);
+      window.setTimeout(function () {
+        card.style.transition = '';
+        settleClass(expanded);
+        if (done) {
+          done();
+        }
+      }, SETTLE_MS);
+    }
+
+    /** Puts the sheet away and brings the floating button back. */
+    function collapseAway() {
+      card.style.transition = DRAG_CURVE;
+      void card.offsetHeight;
+      card.style.transform = 'translateY(-100%)';
+      card.style.opacity = '0';
+      window.setTimeout(finalizeClose, SETTLE_MS);
+    }
+
+    function trackDrag() {
+      frame = 0;
+      var delta = pendingY - startY;
+      if (fullAtStart) {
+        // A full screen can only shrink, and never past the resting size: that step is
+        // the one that happens on release.
+        if (delta < 0) {
+          applyHeight(Math.max(restingHeight(), startHeight + delta));
+        }
+        return;
+      }
+      if (delta >= 0) {
+        // Growing: the card keeps its top edge and stretches downward.
+        card.style.transform = '';
+        card.style.opacity = '';
+        applyHeight(startHeight + delta);
+        return;
+      }
+      // Shrinking below the resting size slides the card up, previewing the way out.
+      card.style.height = restingHeight() + 'px';
+      card.style.maxHeight = restingHeight() + 'px';
+      card.style.transform = 'translateY(' + delta + 'px)';
+      card.style.opacity = String(Math.max(0.3, 1 + delta / (viewport() * 0.6)));
     }
 
     function onMove(event) {
       if (!dragging) {
         return;
       }
-      var delta = event.clientY - startY;
-      // Down stretches the short sheet; from full height, pulling back up shrinks it so
-      // the reader can put the article back in view without closing the conversation.
-      var limit = window.innerHeight;
-      var next = expandedAtStart ? startHeight - Math.max(0, -delta)
-        : startHeight + Math.max(0, delta);
-      card.style.height = Math.max(0, Math.min(limit, next)) + 'px';
+      pendingY = event.clientY;
+      if (!frame) {
+        frame = window.requestAnimationFrame(trackDrag);
+      }
       if (event.cancelable) {
         event.preventDefault();
       }
+    }
+
+    function finishDrag(delta) {
+      var travelled = Math.abs(delta);
+      if (travelled <= 6) {
+        /* A tap, not a drag: the click handler owns that gesture. Animating here as well
+         * made two transitions fight over the same sheet, which is what flashed it. */
+        return;
+      }
+      suppressClick = true;
+      /* The click that follows a drag is ignored, but the flag must not survive to
+       * swallow an unrelated tap when the browser never fires one. */
+      window.setTimeout(function () {
+        suppressClick = false;
+      }, 400);
+      var limit = threshold();
+      if (fullAtStart) {
+        if (delta < -limit) {
+          // First step back down: the resting sheet, not the way out.
+          animateTo(restingHeight(), false);
+          return;
+        }
+        animateTo(availableHeight(), true);
+        return;
+      }
+      if (delta < -limit) {
+        // A second pull upward, from the resting height, is the way out.
+        collapseAway();
+        return;
+      }
+      if (delta > limit) {
+        animateTo(availableHeight(), true);
+        return;
+      }
+      card.style.transform = '';
+      card.style.opacity = '';
+      animateTo(restingHeight(), false);
     }
 
     function onUp(event) {
@@ -538,16 +690,16 @@
         return;
       }
       dragging = false;
-      var delta = (event.clientY || startY) - startY;
-      suppressClick = Math.abs(delta) > 6;
-      if (expandedAtStart) {
-        settle(delta > -40);
-      } else {
-        settle(delta > 40);
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+        frame = 0;
+        trackDrag();
       }
+      var delta = (event && event.clientY != null ? event.clientY : pendingY) - startY;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      finishDrag(delta);
     }
 
     grip.addEventListener('pointerdown', function (event) {
@@ -556,8 +708,9 @@
       }
       dragging = true;
       startY = event.clientY;
-      expandedAtStart = card.classList.contains('is-full');
-      startHeight = card.getBoundingClientRect().height || window.innerHeight;
+      pendingY = event.clientY;
+      fullAtStart = card.classList.contains('is-full');
+      startHeight = card.getBoundingClientRect().height || restingHeight();
       // A finger drag must not also scroll the article behind the sheet.
       card.style.transition = 'none';
       window.addEventListener('pointermove', onMove, { passive: false });
@@ -568,16 +721,18 @@
       }
     });
 
-    // Tapping the handle is a shortcut for "fill the screen", so the gesture also works
-    // for someone who does not know they can drag it.
+    // Tapping the handle is a shortcut for the same two steps, so the gesture also works
+    // for someone who does not know the handle can be dragged.
     grip.addEventListener('click', function () {
       if (suppressClick) {
         suppressClick = false;
         return;
       }
-      var open = !card.classList.contains('is-full');
-      card.classList.toggle('is-full', open);
-      lockPageScroll(open);
+      if (card.classList.contains('is-full')) {
+        animateTo(restingHeight(), false);
+      } else {
+        animateTo(availableHeight(), true);
+      }
     });
   }
 
@@ -616,8 +771,14 @@
     if (!chatDom) {
       buildCard();
     }
+    chatDom.card.style.transition = '';
+    chatDom.card.style.transform = '';
+    chatDom.card.style.opacity = '';
+    chatDom.card.style.height = '';
+    chatDom.card.style.maxHeight = '';
     chatDom.card.style.display = 'flex';
     chatOpen = true;
+    chatClosing = false;
     chatUnread = 0;
     badgeTitle(0);
     renderThread();
@@ -656,11 +817,47 @@
   }
 
   function closeChat() {
-    if (chatDom) {
-      chatDom.card.style.display = 'none';
-      chatDom.card.classList.remove('is-full');
-      chatDom.card.style.height = '';
+    closeChatAnimated();
+  }
+
+  /**
+   * Puts the card away the way the handle does: it slides up and fades out, then the
+   * floating button comes back. A second call while the animation runs is ignored.
+   */
+  function closeChatAnimated() {
+    var card = chatDom && chatDom.card;
+    if (!card || !chatOpen || chatClosing) {
+      return;
     }
+    chatClosing = true;
+    lockPageScroll(false);
+    card.style.transition = 'transform .28s cubic-bezier(.4, 0, .2, 1), '
+      + 'opacity .28s cubic-bezier(.4, 0, .2, 1)';
+    // Resolve the current state first, so the transition applies to this change.
+    void card.offsetHeight;
+    card.style.transform = 'translateY(-100%)';
+    card.style.opacity = '0';
+    window.setTimeout(finalizeClose, 290);
+  }
+
+  var chatClosing = false;
+
+  /** Hides the card and resets everything an animation may have left behind. */
+  function finalizeClose() {
+    var card = chatDom && chatDom.card;
+    chatClosing = false;
+    if (!card) {
+      chatOpen = false;
+      renderLauncher();
+      return;
+    }
+    card.style.transition = '';
+    card.style.transform = '';
+    card.style.opacity = '';
+    card.style.display = 'none';
+    card.classList.remove('is-full');
+    card.style.height = '';
+    card.style.maxHeight = '';
     chatOpen = false;
     lockPageScroll(false);
     renderLauncher();
@@ -728,15 +925,75 @@
     }
   }
 
-  /** Background and shadow of the floating button, kept inline so they never blink. */
+  /*
+   * The launcher copies the theme's own floating controls: a card coloured surface, the
+   * primary coloured mark, a soft shadow that softens further in dark mode, a 1rem
+   * corner and the same press feedback. Everything is inline because a theme page swap
+   * removes the stylesheet for a frame, and it is re-applied whenever the mode changes —
+   * a colour computed once at creation is why the button stayed white after switching.
+   */
   function applyLauncherSurface(node) {
     if (!node) {
       return;
     }
     var dark = isDarkTheme();
-    node.style.backgroundColor = cssColor('--card-bg', dark ? '#1e293b' : '#ffffff');
-    node.style.boxShadow = '0 4px 16px -4px rgba(0, 0, 0, .3)';
+    node.style.backgroundColor = cssColor('--card-bg',
+      dark ? 'oklch(0.23 0.015 250)' : 'oklch(1 0.01 250)');
+    node.style.color = iconColor();
+    node.style.boxShadow = dark
+      ? '0 4px 16px -4px rgba(0, 0, 0, .3)'
+      : '0 4px 14px -4px rgba(0, 0, 0, .08)';
     node.style.borderRadius = '1rem';
+    node.style.transition = 'background-color .3s ease, color .3s ease, '
+      + 'box-shadow .3s ease, transform .18s cubic-bezier(.4, 0, .2, 1)';
+  }
+
+  var launcherAppearance = { dark: null, icon: null };
+
+  /** Re-reads the theme colours, and rebuilds the mark when the primary changed. */
+  function refreshLauncher() {
+    var node = chatLauncher;
+    if (!node) {
+      return;
+    }
+    var dark = isDarkTheme();
+    var icon = iconColor();
+    if (dark === launcherAppearance.dark && icon === launcherAppearance.icon) {
+      return;
+    }
+    launcherAppearance.dark = dark;
+    launcherAppearance.icon = icon;
+    applyLauncherSurface(node);
+    if (node.childNodes && node.childNodes.length) {
+      var mark = node.querySelector('svg path');
+      if (mark) {
+        mark.setAttribute('fill', icon);
+      }
+    }
+  }
+
+  var themeWatcher = null;
+
+  /** Dark mode is toggled on the root element, so that is what is watched. */
+  function watchThemeChanges() {
+    if (themeWatcher || !window.MutationObserver) {
+      return;
+    }
+    themeWatcher = new MutationObserver(function () {
+      refreshLauncher();
+    });
+    themeWatcher.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class', 'data-theme', 'style']
+    });
+    try {
+      var query = window.matchMedia('(prefers-color-scheme: dark)');
+      if (query && query.addEventListener) {
+        query.addEventListener('change', refreshLauncher);
+      }
+    } catch (e) {
+      /* an old browser simply keeps the poll below as its only signal */
+    }
   }
 
   function chatIcon() {
@@ -859,6 +1116,15 @@
       chatLauncher.addEventListener('click', function () {
         openChat(true);
       });
+      chatLauncher.addEventListener('pointerdown', function () {
+        chatLauncher.style.transform = 'scale(.9)';
+      });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (name) {
+        chatLauncher.addEventListener(name, function () {
+          chatLauncher.style.transform = '';
+        });
+      });
+      watchThemeChanges();
       /* Layout that must survive a missing stylesheet: without it a theme head swap
        * turns the avatar into a full page image. */
       chatLauncher.style.position = 'fixed';
@@ -901,6 +1167,7 @@
       chatLauncher.appendChild(badge);
     }
     chatLauncher.style.display = 'flex';
+    refreshLauncher();
   }
 
   /* Re-attaches the widget if a page swap moved the body out from under it. */

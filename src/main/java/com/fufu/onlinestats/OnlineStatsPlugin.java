@@ -76,6 +76,7 @@ public class OnlineStatsPlugin extends BasePlugin {
                 // start-up, which otherwise left the page showing empty rows for data
                 // that was still in the store.
                 statsService.refreshIndexes();
+                statsService.flushPendingWrites();
                 settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
                     .defaultIfEmpty(OnlineStatsSettings.empty())
                     .subscribe(settings -> {

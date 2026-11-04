@@ -307,9 +307,17 @@ const emptyHint = computed(() => {
   }
   return '还没有访问记录。打开任意页面停留十几秒，再回来看这里。'
 })
-/** The ranking lists only the fifteen busiest rows, so the bars stay readable. */
-function top(items: SourceItem[]): SourceItem[] {
-  return items.slice(0, 15)
+/**
+ * The fifteen busiest rows, ordered by the number the panel shows.
+ *
+ * The server orders source rows by page views, but these panels count visitors once
+ * each — so a host with many repeat visits could outrank one with more people. Sorting
+ * on what is displayed is what makes the first row the biggest one.
+ */
+function top(items: SourceItem[], metric: 'visitors' | 'views' = 'visitors'): SourceItem[] {
+  return [...items]
+    .sort((left, right) => (right[metric] ?? 0) - (left[metric] ?? 0))
+    .slice(0, 15)
 }
 
 /**
@@ -491,7 +499,7 @@ onUnmounted(() => {
       <section class="os-panel">
         <h3>浏览器来源<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
-          <li v-for="item in top(browsers)" :key="item.name" @click="openSource('browser', item.name)">
+          <li v-for="item in top(browsers, 'visitors')" :key="item.name" @click="openSource('browser', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar">
               <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
@@ -505,7 +513,7 @@ onUnmounted(() => {
       <section class="os-panel">
         <h3>操作系统来源<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
-          <li v-for="item in top(systems)" :key="item.name" @click="openSource('system', item.name)">
+          <li v-for="item in top(systems, 'visitors')" :key="item.name" @click="openSource('system', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar">
               <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
@@ -519,7 +527,7 @@ onUnmounted(() => {
       <section class="os-panel">
         <h3>来源站点<small class="os-panel__note">按访客计</small></h3>
         <ul class="os-bars">
-          <li v-for="item in top(referers)" :key="item.name" @click="openSource('referer', item.name)">
+          <li v-for="item in top(referers, 'visitors')" :key="item.name" @click="openSource('referer', item.name)">
             <span class="os-bars__name">{{ item.name }}</span>
             <span class="os-bars__bar">
               <i :style="{ width: barWidth(item.visitors ?? 0, 'visitor') }" />
@@ -534,7 +542,7 @@ onUnmounted(() => {
         <h3>页面地址<small class="os-panel__note">按浏览量计</small></h3>
         <ul class="os-bars">
           <li
-            v-for="item in top(pages)"
+            v-for="item in top(pages, 'views')"
             :key="item.name"
             :title="item.name"
             @click="openSource('page', item.name)"

@@ -1257,20 +1257,23 @@ onUnmounted(() => {
 }
 
 /* Clearing is destructive, so those buttons are red whether or not they can be used. */
+/* The two export buttons are one pair: same hue, the selected one a shade lighter so
+ * the difference is emphasis, not a different colour. The disabled state is the same
+ * neutral as every other button on the row. */
 .os-toolbar__refresh--soft {
-  color: #0f766e;
-  background: #f6fdfc;
-  border-color: #d7f0ed;
+  color: #39c5bb;
+  background: #f4fcfb;
+  border-color: #d5eeeb;
 
   &:hover:not(:disabled) {
-    background: #eafaf8;
+    background: #e8f9f7;
   }
 
   &:disabled {
-    color: #c3cbd3;
+    color: #b6bcc4;
     cursor: not-allowed;
-    background: #fafbfc;
-    border-color: #eef0f2;
+    background: #f3f4f6;
+    border-color: #e5e7eb;
   }
 }
 

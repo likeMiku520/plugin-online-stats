@@ -68,6 +68,13 @@ public class StatsAggregationService {
     private final java.util.concurrent.atomic.AtomicLong statSaveFailures =
         new java.util.concurrent.atomic.AtomicLong();
 
+    private static final long MIN_WRITE_INTERVAL_MS = 1000L;
+
+    private final Map<String, Long> lastWriteAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final java.util.Set<String> pendingFlush =
+        java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private final java.util.concurrent.atomic.AtomicLong indexLoadFailures =
         new java.util.concurrent.atomic.AtomicLong();
 
@@ -791,6 +798,9 @@ public class StatsAggregationService {
 
     public synchronized void saveArticle(ArticleStat stat) {
         String name = stat.getMetadata().getName();
+        if (writeIsTooSoon("post:" + name)) {
+            return;
+        }
         boolean isNew = !articleIndex.containsKey(name);
         Exception lastError = null;
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -822,6 +832,48 @@ public class StatsAggregationService {
         noteStatSaveFailure(lastError == null ? new IllegalStateException("save failed")
             : lastError);
         log.warn("Gave up saving article stat {}", name);
+    }
+
+    /**
+     * One heartbeat per visitor every few seconds, and each one used to rewrite both the
+     * day and the article. On a busy site that queue is what a ten second store call
+     * eventually times out against, so writes are folded into at most one per entity per
+     * second. The counters live in memory, so a skipped write is only deferred; the
+     * periodic flush below makes sure nothing waits for the next visitor.
+     */
+    private boolean writeIsTooSoon(String key) {
+        long now = System.currentTimeMillis();
+        Long last = lastWriteAt.get(key);
+        if (last != null && now - last < MIN_WRITE_INTERVAL_MS) {
+            pendingFlush.add(key);
+            return true;
+        }
+        lastWriteAt.put(key, now);
+        pendingFlush.remove(key);
+        return false;
+    }
+
+    /** Writes everything a throttle skipped, so nothing is left only in memory. */
+    public synchronized void flushPendingWrites() {
+        if (pendingFlush.isEmpty()) {
+            return;
+        }
+        List<String> keys = new ArrayList<>(pendingFlush);
+        pendingFlush.clear();
+        for (String key : keys) {
+            lastWriteAt.remove(key);
+            if (key.startsWith("day:")) {
+                DailyStat day = dailyIndex.get(key.substring("day:".length()));
+                if (day != null) {
+                    saveDaily(day);
+                }
+            } else if (key.startsWith("post:")) {
+                ArticleStat article = articleIndex.get(key.substring("post:".length()));
+                if (article != null) {
+                    saveArticle(article);
+                }
+            }
+        }
     }
 
     /** A short pause lets whoever got there first finish their own update. */
@@ -941,6 +993,9 @@ public class StatsAggregationService {
 
     public synchronized void saveDaily(DailyStat stat) {
         String name = stat.getMetadata().getName();
+        if (writeIsTooSoon("day:" + name)) {
+            return;
+        }
         boolean isNew = !dailyIndex.containsKey(name);
         Exception lastError = null;
         for (int attempt = 0; attempt < 3; attempt++) {
