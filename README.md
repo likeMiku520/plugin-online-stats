@@ -139,6 +139,45 @@
 </script>
 ```
 
+主题的侧边栏小部件里，把在线人数和今日数据放在一起：
+
+```html
+<div class="mb-3 flex items-baseline gap-2 px-3">
+  <span id="online-total-count" class="text-2xl font-bold tabular-nums">--</span>
+  <span class="text-sm">人正在浏览</span>
+</div>
+<div class="mb-3 flex items-baseline gap-4 px-3 text-sm">
+  <span>今日访客 <b id="today-visitors" class="tabular-nums">--</b></span>
+  <span>今日浏览 <b id="today-views" class="tabular-nums">--</b></span>
+</div>
+<div id="online-pages-list"></div>
+<script>
+  (function () {
+    var base = '/apis/online-stats.halo.run/v1alpha1';
+    var total = document.getElementById('online-total-count');
+    var visitors = document.getElementById('today-visitors');
+    var views = document.getElementById('today-views');
+    function text(node, value) { if (node && value != null) node.textContent = value; }
+    function load() {
+      fetch(base + '/online-pages', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d) text(total, d.total); })
+        .catch(function () {});
+      fetch(base + '/today-count', { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d) return;
+          text(visitors, d.todayVisitors);
+          text(views, d.todayViews);
+        })
+        .catch(function () {});
+    }
+    load();
+    setInterval(load, 15000);
+  })();
+</script>
+```
+
 ## 已知限制
 
 - 在线人数是「最近有心跳的设备数」，不是账号数；同一个人换浏览器会算两次。
