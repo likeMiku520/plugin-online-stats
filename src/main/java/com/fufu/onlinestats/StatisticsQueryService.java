@@ -282,23 +282,73 @@ public class StatisticsQueryService {
      * The page ranking, taken from the daily counters. Every page view writes there, so
      * a device that read five pages contributes five rows instead of only its last one.
      */
+    /** The route a stored page row belongs to, whatever shape the key has. */
+    private static String pageRouteOf(String key) {
+        String inside = titleInsideRoute(key);
+        return inside == null ? StatsAggregationService.pageRoute(key) : inside;
+    }
+
+    /** The title part of an old "title (route)" key, or null when there is none. */
+    private static String titleInside(String key) {
+        if (key == null) {
+            return null;
+        }
+        int open = key.lastIndexOf(" (");
+        return open > 0 && key.endsWith(")") ? key.substring(0, open) : null;
+    }
+
+    private static String titleInsideRoute(String key) {
+        if (key == null) {
+            return null;
+        }
+        int open = key.lastIndexOf(" (");
+        return open > 0 && key.endsWith(")") ? key.substring(open + 2, key.length() - 1) : null;
+    }
+
+    private static String dimensionOf(String sourceKey) {
+        int bar = sourceKey == null ? -1 : sourceKey.indexOf('|');
+        return bar < 0 ? null : sourceKey.substring(0, bar);
+    }
+
+    private static String sourceValue(String sourceKey) {
+        int bar = sourceKey == null ? -1 : sourceKey.indexOf('|');
+        return bar < 0 ? sourceKey : sourceKey.substring(bar + 1);
+    }
+
     private Map<String, Object> pagesFromDaily(int days, Scope scope) {
         List<DailyStat> window = window(days, null, null);
         Map<String, Long> views = new LinkedHashMap<>();
         Map<String, List<String>> visitors = new LinkedHashMap<>();
+        Map<String, String> labels = new LinkedHashMap<>();
         for (DailyStat day : window) {
-            day.getSpec().pagesOrEmpty().forEach((key, value) -> {
-                views.merge(key, value == null ? 0L : value, Long::sum);
-                List<String> keys = visitors.computeIfAbsent(key, ignored -> new ArrayList<>());
-                List<String> tracked = day.getSpec().getSourceVisitors()
-                    .get(dimensionKey("page", key));
-                if (tracked != null) {
+            DailyStat.Spec spec = day.getSpec();
+            Map<String, String> titles = spec.pageTitlesOrEmpty();
+            spec.pagesOrEmpty().forEach((key, value) -> {
+                String route = pageRouteOf(key);
+                views.merge(route, value == null ? 0L : value, Long::sum);
+                /* Old rows were filed under "title (route)"; the title is kept as this
+                 * route's label so merging does not lose the name it was recorded with. */
+                String title = titles.get(route);
+                if (title == null) {
+                    title = titleInside(key);
+                }
+                if (title != null && !title.isBlank()) {
+                    labels.putIfAbsent(route, title);
+                }
+                List<String> keys = visitors.computeIfAbsent(route, ignored -> new ArrayList<>());
+                spec.sourceVisitorsOrEmpty().forEach((sourceKey, tracked) -> {
+                    if (tracked == null || !"page".equals(dimensionOf(sourceKey))) {
+                        return;
+                    }
+                    if (!route.equals(pageRouteOf(sourceValue(sourceKey)))) {
+                        return;
+                    }
                     for (String visitorKey : tracked) {
                         if (!keys.contains(visitorKey)) {
                             keys.add(visitorKey);
                         }
                     }
-                }
+                });
             });
         }
         if (scope.filtered()) {
@@ -313,8 +363,9 @@ public class StatisticsQueryService {
         views.entrySet().stream()
             .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
             .forEach(entry -> {
+                String title = labels.get(entry.getKey());
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("name", entry.getKey());
+                item.put("name", StatsAggregationService.pageKey(title, entry.getKey()));
                 item.put("views", entry.getValue());
                 item.put("visitors", (long) visitors.getOrDefault(entry.getKey(), List.of()).size());
                 items.add(item);

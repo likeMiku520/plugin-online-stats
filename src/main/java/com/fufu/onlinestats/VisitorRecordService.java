@@ -34,6 +34,9 @@ public class VisitorRecordService {
     private static final long CLEANUP_INTERVAL_SECONDS = 1800L;
     /** How many page visits one record keeps; the console shows the newest. */
     private static final int MAX_PAGE_VISITS = 50;
+    /** Per write attempt. Long enough for a busy store, short enough to retry soon. */
+    private static final java.time.Duration WRITE_TIMEOUT = java.time.Duration.ofSeconds(6);
+    private static final java.time.Duration READ_TIMEOUT = java.time.Duration.ofSeconds(4);
 
     private final Map<String, VisitorRecord> index = new ConcurrentHashMap<>();
     private final ReactiveExtensionClient client;
@@ -51,12 +54,16 @@ public class VisitorRecordService {
     private volatile String lastError;
     private volatile long lastFlushAt;
 
+    private final IpGeoService ipGeoService;
+
     public VisitorRecordService(ReactiveExtensionClient client,
                                 OnlineVisitorRegistry registry,
-                                ReactiveSettingFetcher settingFetcher) {
+                                ReactiveSettingFetcher settingFetcher,
+                                IpGeoService ipGeoService) {
         this.client = client;
         this.registry = registry;
         this.settingFetcher = settingFetcher;
+        this.ipGeoService = ipGeoService;
     }
 
     public void start() {
@@ -278,6 +285,9 @@ public class VisitorRecordService {
         if (save(record, isNew)) {
             visitor.markFlushed(visitor.getPageViewCount(), visitor.getTotalOnlineMs(),
                 visitor.getSessionCount(), now);
+            if (isNew) {
+                lookupLocationOnArrival(name, visitor.getIp(), bot);
+            }
         }
     }
 
@@ -298,6 +308,43 @@ public class VisitorRecordService {
             recordError(e);
             log.warn("Failed to flush visitor {}", key, e);
             return false;
+        }
+    }
+
+    /**
+     * Looks a new address up on its own, when the operator asked for that.
+     *
+     * <p>Only a record that was just created is eligible, so the lookup happens once per
+     * address rather than on every visit. It runs off the flush thread: the lookup is a
+     * call to an outside service, and a slow answer must not delay the next write.</p>
+     */
+    private void lookupLocationOnArrival(String name, String ip, boolean bot) {
+        try {
+            OnlineStatsSettings settings = currentSettings();
+            if (settings == null || !settings.autoGeoLookupOrDefault()) {
+                return;
+            }
+            if (bot && settings.autoGeoSkipBotsOrDefault()) {
+                return;
+            }
+            if (ip == null || ip.isBlank()) {
+                return;
+            }
+            VisitorRecord record = index.get(name);
+            if (record != null && record.getSpec() != null
+                && record.getSpec().getGeoResolvedAt() != null) {
+                return;
+            }
+            ipGeoService.configure(settings.geoEndpointOrDefault());
+            ipGeoService.lookup(ip)
+                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic())
+                .subscribe(location -> {
+                    if (location != null) {
+                        applyLocation(name, location);
+                    }
+                }, error -> log.debug("Automatic location lookup failed for {}", name, error));
+        } catch (Exception e) {
+            log.debug("Automatic location lookup could not start for {}", name, e);
         }
     }
 
@@ -329,11 +376,20 @@ public class VisitorRecordService {
         return index.getOrDefault(name, record);
     }
 
+    /**
+     * Writes one record.
+     *
+     * <p>The version the record already carries is used for the update directly. An
+     * earlier revision read the record back before every write to pick up the current
+     * version, which doubled the store round-trips per heartbeat: under load those two
+     * calls together outlived the ten second ceiling and every visitor in the queue then
+     * waited for it. A rejected version is still handled, by reading once and retrying.</p>
+     */
     private synchronized boolean save(VisitorRecord record, boolean isNew) {
         String name = record.getMetadata().getName();
         if (isNew) {
             try {
-                VisitorRecord result = client.create(record).block(Duration.ofSeconds(10));
+                VisitorRecord result = client.create(record).block(WRITE_TIMEOUT);
                 index.put(name, result != null ? result : record);
                 saveSuccess.incrementAndGet();
                 return true;
@@ -343,29 +399,47 @@ public class VisitorRecordService {
                 log.debug("Create failed for {}, trying an update", name, e);
             }
         }
-        try {
-            VisitorRecord existing = client.fetch(VisitorRecord.class, name)
-                .block(Duration.ofSeconds(5));
-            if (existing == null) {
-                /* The record is gone because an administrator cleared it while this
-                 * device was still online. Writing a fresh one is the right answer, not
-                 * an error: the visitor is simply counted again from now on. */
-                record.getMetadata().setVersion(null);
-                VisitorRecord created = client.create(record).block(Duration.ofSeconds(10));
-                index.put(name, created != null ? created : record);
+        Exception lastError = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                if (attempt > 0) {
+                    VisitorRecord existing = client.fetch(VisitorRecord.class, name)
+                        .block(READ_TIMEOUT);
+                    if (existing == null) {
+                        /* The record is gone because an administrator cleared it while
+                         * this device was still online. Writing a fresh one is the right
+                         * answer, not an error: the visitor is counted again from now. */
+                        record.getMetadata().setVersion(null);
+                        VisitorRecord created = client.create(record).block(WRITE_TIMEOUT);
+                        index.put(name, created != null ? created : record);
+                        saveSuccess.incrementAndGet();
+                        return true;
+                    }
+                    record.getMetadata().setVersion(existing.getMetadata().getVersion());
+                }
+                VisitorRecord result = client.update(record).block(WRITE_TIMEOUT);
+                index.put(name, result != null ? result : record);
                 saveSuccess.incrementAndGet();
                 return true;
+            } catch (Exception e) {
+                lastError = e;
+                if (attempt == 0) {
+                    pauseBeforeRetry();
+                }
             }
-            record.getMetadata().setVersion(existing.getMetadata().getVersion());
-            VisitorRecord result = client.update(record).block(Duration.ofSeconds(10));
-            index.put(name, result != null ? result : record);
-            saveSuccess.incrementAndGet();
-            return true;
-        } catch (Exception e) {
-            saveFailure.incrementAndGet();
-            recordError(e);
-            log.warn("Failed to save visitor record {}", name, e);
-            return false;
+        }
+        saveFailure.incrementAndGet();
+        recordError(lastError);
+        log.warn("Failed to save visitor record {}", name, lastError);
+        return false;
+    }
+
+    /** A short pause lets whoever holds the row finish before the retry reads it. */
+    private static void pauseBeforeRetry() {
+        try {
+            Thread.sleep(50L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

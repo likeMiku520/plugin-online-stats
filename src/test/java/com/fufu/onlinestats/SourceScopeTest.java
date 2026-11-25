@@ -52,7 +52,7 @@ class SourceScopeTest {
             .when(client).listAll(eq(VisitorRecord.class), any(ListOptions.class),
                 any(Sort.class));
         VisitorRecordService service = new VisitorRecordService(client,
-            new OnlineVisitorRegistry(), null);
+            new OnlineVisitorRegistry(), null, null);
         service.start();
         // The history is read off the reactive thread, so wait for it like the plugin
         // does before serving a request.

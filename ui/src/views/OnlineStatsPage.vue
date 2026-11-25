@@ -33,6 +33,7 @@ interface ConversationItem {
   total: number
   lastText: string
   lastAt: number
+  replied: boolean
 }
 
 interface Stats {
@@ -92,7 +93,19 @@ const filteredConversations = computed(() => {
   )
 })
 const conversations = ref<ConversationItem[]>([])
-const chatStats = ref({ conversations: 0, messages: 0 })
+const chatStats = ref({ conversations: 0, replied: 0, messages: 0 })
+/** The error that was dismissed, so a fresh one shows up again. */
+const dismissedError = ref<string | null>(null)
+
+const showHistoryWarning = computed(() => {
+  const error = stats.value.lastError
+  return Boolean(error) && error !== dismissedError.value
+})
+
+function dismissHistoryWarning() {
+  dismissedError.value = stats.value.lastError ?? null
+}
+
 const stats = ref<Stats>({
   online: 0,
   total: 0,
@@ -427,11 +440,20 @@ async function openConversation(key: string) {
   }
 }
 
+/** Threads that hold nothing but the automatic greeting. */
+const greetingOnly = computed(() =>
+  Math.max(0, chatStats.value.conversations - chatStats.value.replied),
+)
+
+/** Threads the visitor answered, which is what the window reports first. */
+const repliedCount = computed(() => conversations.value.filter((item) => item.replied).length)
+
 async function loadChatStats() {
   try {
     const { data } = await axios.get(`${api}/maintenance/summary`)
     chatStats.value = {
       conversations: data.conversations ?? 0,
+      replied: data.repliedConversations ?? 0,
       messages: data.messages ?? 0,
     }
   } catch (e) {
@@ -659,9 +681,12 @@ onUnmounted(() => {
       </div>
       <div class="os-stat os-stat--conv">
         <span class="os-stat__label">会话数</span>
-        <span class="os-stat__value">{{ chatStats.conversations }}</span>
+        <span class="os-stat__value">{{ chatStats.replied }}</span>
         <span class="os-stat__split">
-          <span class="os-stat__part">点击右侧按钮查看全部对话</span>
+          <span class="os-stat__part">访客回过话的会话</span>
+          <span v-if="greetingOnly" class="os-stat__part os-stat__part--bot">
+            仅自动欢迎语 {{ greetingOnly }}
+          </span>
         </span>
         <button
           class="os-stat__open"
@@ -681,7 +706,9 @@ onUnmounted(() => {
       <div class="os-chatwin__panel">
         <div class="os-chatwin__head">
           <strong>全部对话</strong>
-          <span class="os-chatwin__stat">{{ conversations.length }} 位访客</span>
+          <span class="os-chatwin__stat">
+            {{ conversations.length }} 位访客 · {{ repliedCount }} 位回过话
+          </span>
           <span class="os-chatwin__stat">{{ chatStats.messages }} 条消息</span>
           <button class="os-chatwin__close" type="button" @click="chatWindowOpen = false">
             关闭
@@ -783,7 +810,16 @@ onUnmounted(() => {
       <p v-if="manageNote" class="os-manage__note">{{ manageNote }}</p>
     </div>
 
-    <div v-if="stats.lastError" class="os-alert">
+    <div v-if="showHistoryWarning" class="os-alert">
+      <button
+        class="os-alert__close"
+        type="button"
+        title="关闭提示"
+        aria-label="关闭提示"
+        @click="dismissHistoryWarning"
+      >
+        ×
+      </button>
       <strong>历史记录写入失败</strong>
       <span>{{ stats.lastError }}</span>
       <span class="os-alert__hint">请检查 Halo 日志中 online-stats 相关记录</span>
@@ -1135,6 +1171,7 @@ onUnmounted(() => {
 }
 
 .os-alert {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem 0.5rem;
@@ -1146,6 +1183,31 @@ onUnmounted(() => {
   background: #fef2f2;
   border: 1px solid #fecaca;
   border-radius: 0.5rem;
+
+  &__close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    font-size: 1rem;
+    line-height: 1;
+    color: inherit;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: 0.375rem;
+    opacity: 0.65;
+
+    &:hover {
+      opacity: 1;
+      background: rgba(15, 23, 42, 0.06);
+    }
+  }
 
   &__hint {
     font-size: 0.75rem;

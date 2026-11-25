@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -105,6 +106,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
     public RouterFunction<ServerResponse> endpoint() {
         return RouterFunctions.route()
             .GET("/online-count", this::getOnlineCount)
+            .GET("/today-count", this::getTodayCount)
             .GET("/online-pages", this::getOnlinePages)
             .POST("/heartbeat", this::postHeartbeat)
             .GET("/online-stats", this::getScript)
@@ -133,6 +135,30 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return fetchSettings()
             .flatMap(settings -> ServerResponse.ok()
                 .bodyValue(Map.of("count", registry.count(settings.onlineTimeoutMillis()))));
+    }
+
+    /**
+     * Today's totals, open to anonymous callers.
+     *
+     * <p>The console statistics endpoint answers the same numbers but needs a signed in
+     * administrator, which a public badge on a blog page cannot have. This one reads the
+     * day counter that the aggregation service already keeps in memory, so it costs
+     * nothing and stays consistent with what the dashboard shows.</p>
+     */
+    private Mono<ServerResponse> getTodayCount(ServerRequest request) {
+        String today = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        DailyStat stat = statsService.day(today);
+        long views = 0L;
+        long visitors = 0L;
+        if (stat != null && stat.getSpec() != null) {
+            views = stat.getSpec().getViews() == null ? 0L : stat.getSpec().getViews();
+            visitors = stat.getSpec().getVisitors() == null ? 0L : stat.getSpec().getVisitors();
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("date", today);
+        payload.put("todayViews", views);
+        payload.put("todayVisitors", visitors);
+        return ServerResponse.ok().bodyValue(payload);
     }
 
     private Mono<ServerResponse> getOnlinePages(ServerRequest request) {
@@ -1092,6 +1118,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         view.put("ip", showIp ? last.ip() : maskIp(last.ip()));
         view.put("unread", conversation.unread());
         view.put("total", conversation.total());
+        view.put("replied", conversation.replied());
         view.put("lastText", last.text());
         view.put("lastDirection", last.direction());
         view.put("lastAt", last.sentAt());

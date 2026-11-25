@@ -53,6 +53,17 @@ interface ArticleRow {
 const api = '/apis/online-stats.halo.run/v1alpha1'
 
 const overview = ref<Overview | null>(null)
+/** Failure count at the moment the warning was dismissed. */
+const dismissedSaveFailures = ref(0)
+
+const showSaveWarning = computed(() => {
+  const failures = overview.value?.statSaveFailures ?? 0
+  return failures > dismissedSaveFailures.value
+})
+
+function dismissSaveWarning() {
+  dismissedSaveFailures.value = overview.value?.statSaveFailures ?? 0
+}
 const series = ref<Point[]>([])
 const articles = ref<ArticleRow[]>([])
 const browsers = ref<SourceItem[]>([])
@@ -449,7 +460,7 @@ onUnmounted(() => {
       <div class="os-card">
         <span class="os-card__label">总访客</span>
         <span class="os-card__value">{{ overview.uniqueVisitors }}</span>
-        <span class="os-card__hint">插件统计的去重访客</span>
+        <span class="os-card__hint">去重访客，含已清理的历史访客</span>
       </div>
       <div class="os-card">
         <span class="os-card__label">今日浏览</span>
@@ -465,7 +476,16 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="(overview?.statSaveFailures ?? 0) > 0" class="os-warn">
+    <div v-if="showSaveWarning" class="os-warn">
+      <button
+        class="os-warn__close"
+        type="button"
+        title="关闭提示"
+        aria-label="关闭提示"
+        @click="dismissSaveWarning"
+      >
+        ×
+      </button>
       <strong>统计写入失败 {{ overview?.statSaveFailures }} 次</strong>
       <span>{{ overview?.lastStatSaveError || '没有拿到具体原因，请查看 Halo 日志。' }}</span>
       <span class="os-warn__hint">
@@ -671,7 +691,33 @@ onUnmounted(() => {
 </template>
 
 <style lang="scss" scoped>
+.os-warn__close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 0.375rem;
+  opacity: 0.65;
+
+  &:hover {
+    opacity: 1;
+    background: rgba(15, 23, 42, 0.06);
+  }
+}
+
 .os-warn {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;

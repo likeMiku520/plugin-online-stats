@@ -23,13 +23,30 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
                                   String chatAnnounceName,
                                   String chatAnnounceAvatar,
                                   java.util.List<GeoField> geoFields,
-                                  java.util.List<GeoParam> geoParams) {
+                                  java.util.List<GeoParam> geoParams,
+                                  Boolean autoGeoLookup,
+                                  Boolean autoGeoSkipBots) {
 
     /** Tab groups of the Setting resource. */
     public static final String GROUP = "basic";
     public static final String GROUP_CHAT = "chat";
     public static final String GROUP_ANNOUNCE = "announce";
     public static final String GROUP_DATA = "data";
+
+    /**
+     * Whether a newly seen address is looked up on its own.
+     *
+     * <p>Off by default: the lookup calls an outside service with the visitor's address,
+     * which is a decision an operator should make deliberately rather than inherit.</p>
+     */
+    public boolean autoGeoLookupOrDefault() {
+        return Boolean.TRUE.equals(autoGeoLookup);
+    }
+
+    /** Skips robots when looking addresses up on their own. On unless switched off. */
+    public boolean autoGeoSkipBotsOrDefault() {
+        return autoGeoSkipBots == null || autoGeoSkipBots;
+    }
 
     /**
      * One value the lookup should show, read from the provider's JSON at {@code path}.
@@ -45,7 +62,8 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
     /** Settings object used when the stored configuration cannot be read. */
     public static OnlineStatsSettings empty() {
         return new OnlineStatsSettings(null, null, null, null, null, null, null, null,
-            null, null, null, null, null, null, null, java.util.List.of(), java.util.List.of());
+            null, null, null, null, null, null, null, java.util.List.of(), java.util.List.of(),
+            null, null);
     }
 
     /** Wraps a stored group, so the merge below can read any of them the same way. */
@@ -161,7 +179,9 @@ public record OnlineStatsSettings(Integer heartbeatInterval,
             a.text("chatAnnounceName"),
             a.text("chatAnnounceAvatar"),
             geoFields(d.text("geoFields")),
-            geoParams(d.text("geoParams")));
+            geoParams(d.text("geoParams")),
+            d.bool("autoGeoLookup"),
+            d.bool("autoGeoSkipBots"));
     }
 
     /**

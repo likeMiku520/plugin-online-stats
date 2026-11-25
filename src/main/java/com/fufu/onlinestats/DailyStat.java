@@ -65,12 +65,36 @@ public class DailyStat extends AbstractExtension {
             return pages;
         }
 
+        private Map<String, String> pageTitles = new LinkedHashMap<>();
+
+        /**
+         * The title shown for a page route, remembered separately from its counter.
+         *
+         * The counter is keyed by the route alone: the title a browser reports lags
+         * behind a client side page swap and is rewritten by widgets on the same tab, so
+         * using it as part of the key split one address into a dozen rows.
+         */
+        public Map<String, String> pageTitlesOrEmpty() {
+            if (pageTitles == null) {
+                pageTitles = new LinkedHashMap<>();
+            }
+            return pageTitles;
+        }
+
         /** The reading time per device, never null. */
         public Map<String, Long> durationsOrEmpty() {
             if (visitorDurations == null) {
                 visitorDurations = new LinkedHashMap<>();
             }
             return visitorDurations;
+        }
+
+        /** Which devices made up a source, never null. */
+        public Map<String, List<String>> sourceVisitorsOrEmpty() {
+            if (sourceVisitors == null) {
+                sourceVisitors = new LinkedHashMap<>();
+            }
+            return sourceVisitors;
         }
 
         /** Visitor key to the IP that was seen that day. */

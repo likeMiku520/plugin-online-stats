@@ -86,12 +86,25 @@
     return list.filter(Boolean).join(',');
   }
 
+  /**
+   * The page's own title.
+   *
+   * The chat widget prefixes the title with the unread count, and those prefixes used to
+   * be stored as the name of the page a visitor was reading. The counter is stripped here
+   * so the record never carries it.
+   */
+  function pageTitle() {
+    var raw = String(document.title || '');
+    var cleaned = raw.replace(/^（\d+）/, '').trim();
+    return cleaned || raw;
+  }
+
   function payload() {
     return {
       visitorId: vid,
       postName: postName(),
       url: location.pathname + location.search,
-      title: document.title,
+      title: pageTitle(),
       referer: document.referrer,
       screen: screenInfo(),
       viewport: window.innerWidth + 'x' + window.innerHeight,
@@ -1247,7 +1260,7 @@
       body: JSON.stringify({
         text: text,
         url: location.pathname + location.search,
-        title: document.title
+        title: pageTitle()
       })
     }).then(function (response) {
       return response.ok ? response.json() : null;

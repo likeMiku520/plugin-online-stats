@@ -114,6 +114,19 @@ spec:
             运营商=isp
             网络=net
             归属地=location
+        - $formkit: checkbox
+          name: autoGeoLookup
+          label: 自动查询属地
+          help: |-
+            开启后，遇到没记录过的地址会自动请求上面的接口并把结果写进访客明细；只有新出现的访客会被查询，已经查过的不会重复请求。
+            关闭时和以前一样，只有在访客明细里点「查询属地」才会请求。
+          value: false
+        - $formkit: checkbox
+          name: autoGeoSkipBots
+          label: 排除机器人
+          help: 只查询真人的地址，爬虫和没有上报浏览器信息的访客跳过。仅在上面的自动查询开启时生效。
+          value: true
+          if: $get(autoGeoLookup).value
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数

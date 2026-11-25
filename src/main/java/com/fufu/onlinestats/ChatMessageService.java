@@ -361,12 +361,16 @@ public class ChatMessageService {
                 continue;
             }
             int unread = 0;
+            boolean replied = false;
             for (ChatEntry message : thread) {
                 if (!message.readByAdmin()) {
                     unread++;
                 }
+                if (!"admin".equals(message.direction())) {
+                    replied = true;
+                }
             }
-            result.add(new Conversation(entry.getKey(), last, unread, thread.size()));
+            result.add(new Conversation(entry.getKey(), last, unread, thread.size(), replied));
         }
         result.sort(Comparator.comparingLong(
             (Conversation conversation) -> conversation.last().sentAt()).reversed());
@@ -837,7 +841,15 @@ public class ChatMessageService {
     }
 
     /** One row of the console conversation list. */
-    public record Conversation(String key, ChatEntry last, int unread, int total) {
+    /**
+     * One visitor's thread.
+     *
+     * <p>{@code replied} says whether the visitor ever wrote anything. The automatic
+     * greeting opens a thread for every visitor, so counting threads alone reported a
+     * conversation for everybody who merely loaded a page.</p>
+     */
+    public record Conversation(String key, ChatEntry last, int unread, int total,
+                               boolean replied) {
     }
 
     /** A display identity: who wrote a message. */

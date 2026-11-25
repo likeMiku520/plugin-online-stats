@@ -553,13 +553,14 @@ public class StatsAggregationService {
             stat.getSpec().setTotalOnlineMs(0L);
         }
         DailyStat.Spec spec = stat.getSpec();
-        String pageName = pageKeyOf(visitor);
+        String pageRoute = pageRoute(visitor.getPageUrl());
         if (view) {
             spec.setViews(nvl(spec.getViews()) + 1);
             if (postName != null) {
                 spec.getPosts().merge(postName, 1L, Long::sum);
             }
-            spec.pagesOrEmpty().merge(pageName, 1L, Long::sum);
+            spec.pagesOrEmpty().merge(pageRoute, 1L, Long::sum);
+            rememberPageTitle(spec, pageRoute, pageTitleOf(postName, visitor));
             spec.getVisitorViews().merge(visitor.getKey(), 1L, Long::sum);
             spec.getBrowsers().merge(browser, 1L, Long::sum);
             spec.getSystems().merge(system, 1L, Long::sum);
@@ -567,7 +568,7 @@ public class StatsAggregationService {
             trackSourceVisitor(spec, "browser", browser, visitor.getKey());
             trackSourceVisitor(spec, "system", system, visitor.getKey());
             trackSourceVisitor(spec, "referer", referer, visitor.getKey());
-            trackSourceVisitor(spec, "page", pageName, visitor.getKey());
+            trackSourceVisitor(spec, "page", pageRoute, visitor.getKey());
         }
         if (durationDelta > 0) {
             spec.setTotalOnlineMs(nvl(spec.getTotalOnlineMs()) + durationDelta);
@@ -675,6 +676,37 @@ public class StatsAggregationService {
      */
     public static String pageKeyOf(OnlineVisitor visitor) {
         return pageKey(visitor.getPageTitle(), visitor.getPageUrl());
+    }
+
+    /** The route a counter is filed under. Titles drift, routes do not. */
+    public static String pageRoute(String url) {
+        String route = routeOf(url);
+        return route == null || route.isBlank() ? "未知页面" : route;
+    }
+
+    /** The label for a page: the article's own title when there is one. */
+    private String pageTitleOf(String postName, OnlineVisitor visitor) {
+        Post post = postName == null ? null : postIndex.get(postName);
+        if (post != null && post.getSpec() != null) {
+            String title = post.getSpec().getTitle();
+            if (title != null && !title.isBlank()) {
+                return title.trim();
+            }
+        }
+        /* A page swap leaves the browser's title one navigation behind, and the chat
+         * widget rewrites it while counting unread messages. Nothing here is trusted
+         * beyond a first impression, which is why it only ever labels a route. */
+        String reported = visitor.getPageTitle();
+        return reported == null || reported.isBlank() ? null : reported.trim();
+    }
+
+    /** First title wins: a later heartbeat from another tab must not rename the page. */
+    private static void rememberPageTitle(DailyStat.Spec spec, String route, String title) {
+        if (title == null || title.isBlank()) {
+            return;
+        }
+        spec.pageTitlesOrEmpty().putIfAbsent(route, title);
+        trimString(spec.pageTitlesOrEmpty());
     }
 
     public static String pageKey(String title, String url) {
@@ -1060,11 +1092,28 @@ public class StatsAggregationService {
         mergeMax(into.getReferrers(), from.getReferrers());
         mergeMax(into.getCountries(), from.getCountries());
         mergeMax(into.getVisitorViews(), from.getVisitorViews());
+        mergeMax(into.pagesOrEmpty(), from.pagesOrEmpty());
+        mergeMax(into.durationsOrEmpty(), from.durationsOrEmpty());
+        from.pageTitlesOrEmpty().forEach(into.pageTitlesOrEmpty()::putIfAbsent);
+        mergeSourceVisitors(into.sourceVisitorsOrEmpty(), from.sourceVisitorsOrEmpty());
         from.getVisitorIps().forEach(into.getVisitorIps()::putIfAbsent);
     }
 
     private static void mergeMax(Map<String, Long> into, Map<String, Long> from) {
         from.forEach((key, value) -> into.merge(key, value, Math::max));
+    }
+
+    /** The visitors behind a source keep both sides of a conflict, minus duplicates. */
+    private static void mergeSourceVisitors(Map<String, List<String>> into,
+                                            Map<String, List<String>> from) {
+        from.forEach((key, values) -> {
+            List<String> target = into.computeIfAbsent(key, ignored -> new ArrayList<>());
+            for (String value : values) {
+                if (value != null && !target.contains(value)) {
+                    target.add(value);
+                }
+            }
+        });
     }
 
     public void clear() {

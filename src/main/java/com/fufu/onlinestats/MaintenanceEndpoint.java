@@ -107,7 +107,12 @@ public class MaintenanceEndpoint implements CustomEndpoint {
         payload.put("visitors", humans + bots);
         payload.put("humans", humans);
         payload.put("bots", bots);
-        payload.put("conversations", chatService.allConversations().size());
+        List<ChatMessageService.Conversation> threads = chatService.allConversations();
+        payload.put("conversations", threads.size());
+        /* Only a thread the visitor wrote in is a conversation a reader would recognise;
+         * the rest are the automatic greeting sitting on its own. */
+        payload.put("repliedConversations",
+            threads.stream().filter(ChatMessageService.Conversation::replied).count());
         payload.put("messages", messages);
         // Shown on the page so the running build can be identified at a glance.
         payload.put("version", pluginVersion());
