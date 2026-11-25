@@ -120,26 +120,108 @@
 
 ## 对外接口
 
-不需要登录，可以直接在主题或自己的页面里调用：
+所有接口都在同一个组下：
 
-| 接口 | 返回 |
-| --- | --- |
-| `GET /apis/online-stats.halo.run/v1alpha1/online-count` | `{"count": 3}`，当前在线人数 |
-| `GET /apis/online-stats.halo.run/v1alpha1/today-count` | `{"date": "2026-11-25", "todayViews": 327, "todayVisitors": 181}` |
-| `GET /apis/online-stats.halo.run/v1alpha1/online-pages` | `{"total": 3, "pages": [{"title": "...", "count": 2}]}` |
-
-`today-count` 读的是当天已经算好的计数，和后台统计页显示的数字一致。比如在侧边栏里显示今日访客：
-
-```html
-<span id="today-visitors">-</span>
-<script>
-  fetch('/apis/online-stats.halo.run/v1alpha1/today-count')
-    .then((r) => r.json())
-    .then((d) => { document.getElementById('today-visitors').textContent = d.todayVisitors })
-</script>
+```
+/apis/online-stats.halo.run/v1alpha1
 ```
 
-主题的侧边栏小部件里，把在线人数和今日数据放在一起：
+返回都是 JSON，除了 `online-stats`（追踪脚本）和两个导出接口。
+
+### 公开接口
+
+不需要登录，主题小部件、博客前台的脚本都可以直接调用。
+
+| 方法 | 路径 | 返回 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/online-count` | `{"count": 3}` 当前在线人数 | 无 |
+| GET | `/today-count` | `{"date": "2026-11-25", "todayViews": 327, "todayVisitors": 181}` | 无 |
+| GET | `/online-pages` | `{"total": 3, "pages": [{"title": "…", "count": 2}]}` | 无 |
+
+```bash
+curl https://example.com/apis/online-stats.halo.run/v1alpha1/today-count
+```
+
+- `count` / `total` 是「最近有心跳的设备数」，不是账号数。
+- `todayViews` 按「进入一次页面」计，`todayVisitors` 是当天去重后的访客数。
+- `pages` 只列出当前有人在看的页面，标题取自文章标题。
+
+下面几条只给插件自己的脚本用，正常不需要手动调用：`GET /online-stats`（追踪脚本本身）、`POST /heartbeat`（上报心跳）、`GET /chat-inbox`、`POST /chat-reply`、`POST /chat-seen`（访客侧的对话信框）。
+
+### 管理员接口
+
+需要登录，并且是超级管理员。浏览器里直接打开会带上会话；脚本调用时要带 Cookie。
+
+#### 访客
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/visitors` | 当前在线的访客列表 | 无 |
+| GET | `/records` | 访客明细，分页 | `page` `size` `keyword` `status` `type` `sort` |
+| GET | `/records/{name}` | 单个访客的完整记录 | 路径参数 |
+| GET | `/location` | 查一个地址的属地 | `name`（访客名）或 `ip` |
+| GET | `/statistics/visitors/{visitorKey}` | 访客的统计视图 | 路径参数 |
+
+#### 统计
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/statistics/overview` | 总览，含 `todayViews`、`todayVisitors`、官方计数 | `type` |
+| GET | `/statistics/trend` | 每日与累计趋势 | `days` `type` |
+| GET | `/statistics/articles` | 文章排行 | `days` `sort` `limit` `type` |
+| GET | `/statistics/articles/{postName}` | 单篇文章的明细 | 路径参数 |
+| GET | `/statistics/sources` | 浏览器、系统、来源、页面四个维度 | `dimension` `days` `from` `to` `type` |
+| GET | `/statistics/sources/detail` | 某个来源下的明细 | `dimension` `value` `days` |
+
+#### 对话
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/chat-conversations` | 全部会话，带 `replied` 标记 | 无 |
+| GET | `/chat-messages` | 一个会话的消息 | `key` |
+| POST | `/chat-send` | 给访客发消息 | 请求体 |
+| POST | `/chat-read-all` | 全部标为已读 | 无 |
+
+#### 维护
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/maintenance/summary` | 访客、真人、机器人、会话总数 | 无 |
+| GET | `/maintenance/visitors` | 维护页的访客列表 | `page` `size` `keyword` `sort` `type` |
+| GET | `/maintenance/conversations` | 维护页的会话列表 | `page` `size` `keyword` `sort` `type` |
+| GET | `/maintenance/thread` | 一个会话的完整记录 | `key` |
+| GET | `/maintenance/visitors/export` | 导出访客数据，JSON 附件 | `type` `keys` `keyword` |
+| GET | `/maintenance/chat/export` | 导出聊天记录，JSON 附件 | `type` `keys` `keyword` |
+| POST | `/maintenance/clear` | 清除数据 | 请求体 `what` `all` `keys` |
+
+### 参数取值
+
+| 参数 | 取值 | 含义 |
+| --- | --- | --- |
+| `type` | `all` / `human` / `bot` | 全部访客 / 只算真人 / 只算机器人 |
+| `dimension` | `browser` / `system` / `referer` / `page` | 浏览器 / 操作系统 / 来源站点 / 页面地址 |
+| `status` | `all` / `online` | 访客明细的筛选 |
+| `sort` | 见各接口 | `views`、`visitors`、`lastSeenAt` 等 |
+| `days` | 整数 | 统计窗口，默认 30 |
+| `from` / `to` | `yyyy-MM-dd` | 指定日期范围，优先于 `days` |
+| `keys` | 逗号分隔 | 只处理选中的那几条 |
+
+### 权限
+
+接口权限来自两张角色模板：
+
+- **匿名**：`heartbeat`、`online-count`、`online-pages`、`today-count`、`online-stats`、`chat-inbox`、`chat-reply`、`chat-seen`
+- **超级管理员**：`visitors`、`records`、`location`、`statistics`、`chat-conversations`、`chat-messages`、`chat-send`、`chat-read-all`
+
+所以博客前台只能用到公开的那三个 GET；其余需要登录。
+
+### 扩展资源
+
+统计数据本身也存在 Halo 的资源里，管理员可以走通用扩展 API 读取：`VisitorRecord`、`DailyStat`、`ArticleStat`、`ChatMessage`。字段偏内部、结构也按聚合需要设计，展示用途还是建议用上面的接口。
+
+### 侧边栏小部件示例
+
+把在线人数、今日访客、今日浏览放在同一张卡片里，直接抄进主题的 `widget`：
 
 ```html
 <div class="mb-3 flex items-baseline gap-2 px-3">
