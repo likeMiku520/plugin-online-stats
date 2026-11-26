@@ -192,7 +192,7 @@ public class ChatMessageService {
      * text and the sender are compared against the configured greeting; a reply an
      * administrator typed has a different sender and different words.</p>
      */
-    private boolean isAutomated(ChatEntry entry) {
+    public boolean isAutomatedMessage(ChatEntry entry) {
         if (entry.automated()) {
             return true;
         }
@@ -423,7 +423,7 @@ public class ChatMessageService {
                 }
                 if (!"admin".equals(message.direction())) {
                     replied = true;
-                } else if (!isAutomated(message)) {
+                } else if (!isAutomatedMessage(message)) {
                     /* Only a greeting is skipped: anything else was written on purpose,
                      * either from the console or by the announcement test. */
                     answered = true;

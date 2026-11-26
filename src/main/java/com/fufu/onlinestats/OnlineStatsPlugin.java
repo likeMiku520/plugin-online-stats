@@ -63,6 +63,11 @@ public class OnlineStatsPlugin extends BasePlugin {
         scheduler.schedule(() -> {
             try {
                 statsService.refreshIndexes();
+                /* The greeting is what tells an old automatic message from a reply the
+                 * administrator typed. It has to be known before the console opens the
+                 * conversation list, not only when the slow loop next runs. */
+                OnlineStatsSettings early = liveSettings.settings(configMapName);
+                chatService.setGreeting(early.chatAnnounceText(), early.chatAnnounceName());
             } catch (Exception ignored) {
                 // the scheduled refresh will try again
             }

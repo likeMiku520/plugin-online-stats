@@ -274,7 +274,7 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             for (ChatMessageService.ChatEntry entry : chatService.thread(key)) {
                 if (!"admin".equals(entry.direction())) {
                     replied = true;
-                } else if (!entry.automated()) {
+                } else if (!chatService.isAutomatedMessage(entry)) {
                     answered = true;
                 }
             }
