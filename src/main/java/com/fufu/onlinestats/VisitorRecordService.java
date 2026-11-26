@@ -55,15 +55,21 @@ public class VisitorRecordService {
     private volatile long lastFlushAt;
 
     private final IpGeoService ipGeoService;
+    private final LiveSettings liveSettings;
+    private final String configMapName;
 
     public VisitorRecordService(ReactiveExtensionClient client,
                                 OnlineVisitorRegistry registry,
                                 ReactiveSettingFetcher settingFetcher,
-                                IpGeoService ipGeoService) {
+                                IpGeoService ipGeoService,
+                                LiveSettings liveSettings,
+                                run.halo.app.plugin.PluginContext pluginContext) {
         this.client = client;
         this.registry = registry;
         this.settingFetcher = settingFetcher;
         this.ipGeoService = ipGeoService;
+        this.liveSettings = liveSettings;
+        this.configMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
     public void start() {
@@ -422,6 +428,12 @@ public class VisitorRecordService {
                 saveSuccess.incrementAndGet();
                 return true;
             } catch (Exception e) {
+                if (StatsAggregationService.schemeMissing(e)) {
+                    /* The plugin is being swapped out. The record stays in memory and is
+                     * written again on the next flush. */
+                    log.debug("Scheme not registered yet, deferring the visitor record");
+                    return false;
+                }
                 lastError = e;
                 if (attempt == 0) {
                     pauseBeforeRetry();
@@ -526,9 +538,12 @@ public class VisitorRecordService {
 
     private OnlineStatsSettings currentSettings() {
         try {
-            return settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-                .block(Duration.ofSeconds(2));
+            if (liveSettings == null) {
+                return null;
+            }
+            return liveSettings.settings(configMapName);
         } catch (Exception e) {
+            log.debug("Could not read the settings", e);
             return null;
         }
     }

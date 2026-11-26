@@ -266,6 +266,18 @@ public class MaintenanceEndpoint implements CustomEndpoint {
                 last == null ? null : last.text())) {
                 continue;
             }
+            /* The window's filter buttons are driven by these two flags, so they have
+             * to ride along with the row: the list is read from this endpoint, not from
+             * the conversation view that already carried them. */
+            boolean replied = false;
+            boolean answered = false;
+            for (ChatMessageService.ChatEntry entry : chatService.thread(key)) {
+                if (!"admin".equals(entry.direction())) {
+                    replied = true;
+                } else if (!entry.automated()) {
+                    answered = true;
+                }
+            }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("visitorKey", key);
             row.put("ip", ip);
@@ -283,6 +295,8 @@ public class MaintenanceEndpoint implements CustomEndpoint {
             row.put("firstSeenAt", spec == null ? 0L : spec.getFirstSeenAt());
             row.put("lastSeenAt", last == null ? 0L : last.sentAt());
             row.put("visitCount", spec == null ? 0L : spec.getVisitCount());
+            row.put("replied", replied);
+            row.put("answered", answered);
             rows.add(row);
         }
         rows.sort(filter.comparator());

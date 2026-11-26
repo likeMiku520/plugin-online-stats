@@ -128,6 +128,27 @@ public class LiveSettings {
     }
 
     /**
+     * Every tab assembled into one settings object.
+     *
+     * <p>Halo stores each form group under its own key, so a fetcher bound to one group
+     * only ever sees that group's fields. Callers that need the data tab — retention,
+     * the address lookup switches — have to read all of them.</p>
+     */
+    public OnlineStatsSettings settings(String configMapName) {
+        Map<String, String> basic = group(configMapName, OnlineStatsSettings.GROUP).orElse(Map.of());
+        Map<String, String> chat = group(configMapName, OnlineStatsSettings.GROUP_CHAT)
+            .orElse(Map.of());
+        Map<String, String> greeting = greetingValues(configMapName);
+        Map<String, String> data = group(configMapName, OnlineStatsSettings.GROUP_DATA)
+            .orElse(Map.of());
+        return OnlineStatsSettings.fromTabs(
+            OnlineStatsSettings.tab(basic),
+            OnlineStatsSettings.tab(chat),
+            OnlineStatsSettings.tab(greeting),
+            OnlineStatsSettings.tab(data));
+    }
+
+    /**
      * The conversation tab together with a greeting an older version saved under its own
      * group. The current tab wins, so an edit made now is not overridden by that leftover.
      */

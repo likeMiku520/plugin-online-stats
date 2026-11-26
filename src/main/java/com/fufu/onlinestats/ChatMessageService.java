@@ -168,6 +168,45 @@ public class ChatMessageService {
             ? ADMIN_FALLBACK_NAME : user.getMetadata().getName();
     }
 
+    /** The greeting currently configured, used to recognise messages written before the
+     * automated flag existed. */
+    private volatile String greetingText;
+
+    /** The sender the greeting is written under, the second half of the same check. */
+    private volatile String greetingAuthor;
+
+    /** Remembers the greeting so older messages can still be told apart from replies. */
+    public void setGreeting(String text, String author) {
+        this.greetingText = text == null || text.isBlank() ? null : text;
+        this.greetingAuthor = author == null || author.isBlank() ? null : author;
+    }
+
+    public void setGreetingText(String text) {
+        setGreeting(text, greetingAuthor);
+    }
+
+    /**
+     * True when this message came from the automatic greeting.
+     *
+     * <p>The flag is authoritative. Rows written before it existed carry neither, so the
+     * text and the sender are compared against the configured greeting; a reply an
+     * administrator typed has a different sender and different words.</p>
+     */
+    private boolean isAutomated(ChatEntry entry) {
+        if (entry.automated()) {
+            return true;
+        }
+        if (!"admin".equals(entry.direction())) {
+            return false;
+        }
+        String greeting = greetingText;
+        if (greeting != null && greeting.equals(entry.text())) {
+            return true;
+        }
+        String author = greetingAuthor;
+        return author != null && author.equals(entry.authorName());
+    }
+
     private static String avatarOf(User user) {
         if (user == null || user.getSpec() == null) {
             return null;
@@ -180,12 +219,24 @@ public class ChatMessageService {
     public ChatEntry append(String key, String ip, String direction, String text,
                             String authorName, String authorAvatar, String pageUrl,
                             String pageTitle) {
+        return append(key, ip, direction, text, authorName, authorAvatar, pageUrl,
+            pageTitle, false);
+    }
+
+    /**
+     * Adds a message, marking it as the automatic greeting when {@code automated} is set.
+     * The greeting opens a thread for every visitor, so the console needs to tell those
+     * apart from a message somebody actually typed.
+     */
+    public ChatEntry append(String key, String ip, String direction, String text,
+                            String authorName, String authorAvatar, String pageUrl,
+                            String pageTitle, boolean automated) {
         long now = System.currentTimeMillis();
         long order = seq.incrementAndGet();
         boolean fromConsole = !"visitor".equals(direction);
         ChatEntry entry = new ChatEntry(order, key, ip, direction, text, now,
             authorName, authorAvatar, pageUrl, pageTitle, fromConsole, false,
-            !fromConsole);
+            !fromConsole, automated);
         Deque<ChatEntry> thread =
             conversations.computeIfAbsent(key, ignored -> new ConcurrentLinkedDeque<>());
         thread.addLast(entry);
@@ -211,6 +262,8 @@ public class ChatMessageService {
         if (key == null || text == null || text.isBlank()) {
             return null;
         }
+        greetingText = text;
+        greetingAuthor = authorName;
         Deque<ChatEntry> thread = conversations.get(key);
         if (thread != null && !thread.isEmpty()) {
             ChatEntry first = thread.peekFirst();
@@ -229,7 +282,8 @@ public class ChatMessageService {
                 }
             }
         }
-        return append(key, ip, "admin", text, authorName, authorAvatar, pageUrl, pageTitle);
+        return append(key, ip, "admin", text, authorName, authorAvatar, pageUrl, pageTitle,
+            true);
     }
 
     private boolean hasConversation(String key) {
@@ -362,15 +416,21 @@ public class ChatMessageService {
             }
             int unread = 0;
             boolean replied = false;
+            boolean answered = false;
             for (ChatEntry message : thread) {
                 if (!message.readByAdmin()) {
                     unread++;
                 }
                 if (!"admin".equals(message.direction())) {
                     replied = true;
+                } else if (!isAutomated(message)) {
+                    /* Only a greeting is skipped: anything else was written on purpose,
+                     * either from the console or by the announcement test. */
+                    answered = true;
                 }
             }
-            result.add(new Conversation(entry.getKey(), last, unread, thread.size(), replied));
+            result.add(new Conversation(entry.getKey(), last, unread, thread.size(),
+                replied, answered));
         }
         result.sort(Comparator.comparingLong(
             (Conversation conversation) -> conversation.last().sentAt()).reversed());
@@ -580,7 +640,7 @@ public class ChatMessageService {
             spec.getSentAt() == null ? 0L : spec.getSentAt(),
             spec.getAuthorName(), spec.getAuthorAvatar(), spec.getPageUrl(),
             spec.getPageTitle(), Boolean.TRUE.equals(spec.getReadByAdmin()), true,
-            Boolean.TRUE.equals(spec.getSeenByVisitor()));
+            Boolean.TRUE.equals(spec.getSeenByVisitor()), Boolean.TRUE.equals(spec.getAutomated()));
     }
 
     private void persist(ChatEntry entry) {
@@ -694,6 +754,7 @@ public class ChatMessageService {
         spec.setPageTitle(entry.pageTitle());
         spec.setReadByAdmin(entry.readByAdmin());
         spec.setSeenByVisitor(entry.seenByVisitor());
+        spec.setAutomated(entry.automated());
         return message;
     }
 
@@ -717,6 +778,7 @@ public class ChatMessageService {
         private volatile boolean readByAdmin;
         private volatile boolean seenByVisitor;
         private volatile boolean persisted;
+        private final boolean automated;
 
         ChatEntry(long seq, String key, String ip, String direction, String text,
                   long sentAt, String authorName, String authorAvatar, String pageUrl,
@@ -736,6 +798,14 @@ public class ChatMessageService {
                   long sentAt, String authorName, String authorAvatar, String pageUrl,
                   String pageTitle, boolean readByAdmin, boolean persisted,
                   boolean seenByVisitor) {
+            this(seq, key, ip, direction, text, sentAt, authorName, authorAvatar, pageUrl,
+                pageTitle, readByAdmin, persisted, seenByVisitor, false);
+        }
+
+        ChatEntry(long seq, String key, String ip, String direction, String text,
+                  long sentAt, String authorName, String authorAvatar, String pageUrl,
+                  String pageTitle, boolean readByAdmin, boolean persisted,
+                  boolean seenByVisitor, boolean automated) {
             this.seq = seq;
             this.key = key;
             this.ip = ip;
@@ -749,6 +819,7 @@ public class ChatMessageService {
             this.readByAdmin = readByAdmin;
             this.seenByVisitor = seenByVisitor;
             this.persisted = persisted;
+            this.automated = automated;
             this.name = "c-" + Long.toString(seq, 36) + "-" + shortHash(key);
         }
 
@@ -781,6 +852,11 @@ public class ChatMessageService {
 
         public boolean seenByVisitor() {
             return seenByVisitor;
+        }
+
+        /** True when the automatic greeting wrote this message. */
+        public boolean automated() {
+            return automated;
         }
 
         boolean isPersisted() {
@@ -849,7 +925,7 @@ public class ChatMessageService {
      * conversation for everybody who merely loaded a page.</p>
      */
     public record Conversation(String key, ChatEntry last, int unread, int total,
-                               boolean replied) {
+                               boolean replied, boolean answered) {
     }
 
     /** A display identity: who wrote a message. */

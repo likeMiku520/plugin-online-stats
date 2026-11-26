@@ -165,14 +165,22 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         return fetchSettings()
             .flatMap(settings -> {
                 long timeout = settings.onlineTimeoutMillis();
-                var pages = registry.list(timeout).stream()
-                    .map(OnlineVisitor::getPageTitle)
-                    .filter(title -> title != null && !title.isBlank())
-                    .collect(Collectors.groupingBy(Function.identity(), LinkedHashMap::new,
-                        Collectors.counting()))
-                    .entrySet().stream()
-                    .map(e -> new PageView(e.getKey(), e.getValue().intValue()))
-                    .toList();
+                /* Grouped by route, not by title: the title a browser reports lags behind
+                 * a client side page swap, so two visitors on the same page could end up
+                 * in two rows. The route is the address they actually have open. */
+                Map<String, PageView> byRoute = new LinkedHashMap<>();
+                for (OnlineVisitor visitor : registry.list(timeout)) {
+                    String route = StatsAggregationService.pageRoute(visitor.getPageUrl());
+                    String title = visitor.getPageTitle();
+                    if (title == null || title.isBlank()) {
+                        title = route;
+                    }
+                    PageView seen = byRoute.get(route);
+                    byRoute.put(route, seen == null
+                        ? new PageView(title, route, 1)
+                        : new PageView(seen.title(), route, seen.count() + 1));
+                }
+                var pages = new java.util.ArrayList<>(byRoute.values());
                 return ServerResponse.ok()
                     .bodyValue(Map.of("total", registry.count(timeout), "pages", pages));
             });
@@ -1119,6 +1127,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
         view.put("unread", conversation.unread());
         view.put("total", conversation.total());
         view.put("replied", conversation.replied());
+        view.put("answered", conversation.answered());
         view.put("lastText", last.text());
         view.put("lastDirection", last.direction());
         view.put("lastAt", last.sentAt());
@@ -1203,7 +1212,7 @@ public class OnlineStatsEndpoint implements CustomEndpoint {
             .orElse("unknown");
     }
 
-    public record PageView(String title, int count) {
+    public record PageView(String title, String route, int count) {
     }
 
     public record LiveView(String visitorId, String ip, String userAgent,

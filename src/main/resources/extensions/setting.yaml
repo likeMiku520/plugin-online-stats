@@ -115,6 +115,7 @@ spec:
             网络=net
             归属地=location
         - $formkit: checkbox
+          id: autoGeoLookup
           name: autoGeoLookup
           label: 自动查询属地
           help: |-
@@ -122,11 +123,12 @@ spec:
             关闭时和以前一样，只有在访客明细里点「查询属地」才会请求。
           value: false
         - $formkit: checkbox
+          id: autoGeoSkipBots
           name: autoGeoSkipBots
           label: 排除机器人
           help: 只查询真人的地址，爬虫和没有上报浏览器信息的访客跳过。仅在上面的自动查询开启时生效。
           value: true
-          if: $get(autoGeoLookup).value
+          if: "$get(autoGeoLookup).value === true"
         - $formkit: number
           name: historyRetentionDays
           label: 访客记录保留天数

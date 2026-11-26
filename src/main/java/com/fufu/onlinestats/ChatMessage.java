@@ -58,6 +58,9 @@ public class ChatMessage extends AbstractExtension {
 
         private Boolean readByAdmin;
 
+        /** True for the automatic greeting; a message the administrator typed leaves it false. */
+        private Boolean automated;
+
         /**
          * Whether the visitor's page has actually shown this message. A console message
          * written while nobody was on the site stays false, so the next visit can hand

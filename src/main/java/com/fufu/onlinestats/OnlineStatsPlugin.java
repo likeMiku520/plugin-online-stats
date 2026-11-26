@@ -22,6 +22,8 @@ public class OnlineStatsPlugin extends BasePlugin {
     private final ChatMessageService chatService;
     private final SchemeManager schemeManager;
     private final run.halo.app.plugin.ReactiveSettingFetcher settingFetcher;
+    private final LiveSettings liveSettings;
+    private final String configMapName;
     private ScheduledExecutorService scheduler;
 
     public OnlineStatsPlugin(PluginContext pluginContext, OnlineVisitorRegistry registry,
@@ -29,7 +31,8 @@ public class OnlineStatsPlugin extends BasePlugin {
                              StatsAggregationService statsService,
                              ChatMessageService chatService,
                              SchemeManager schemeManager,
-                             run.halo.app.plugin.ReactiveSettingFetcher settingFetcher) {
+                             run.halo.app.plugin.ReactiveSettingFetcher settingFetcher,
+                             LiveSettings liveSettings) {
         super(pluginContext);
         this.registry = registry;
         this.recordService = recordService;
@@ -37,6 +40,8 @@ public class OnlineStatsPlugin extends BasePlugin {
         this.chatService = chatService;
         this.schemeManager = schemeManager;
         this.settingFetcher = settingFetcher;
+        this.liveSettings = liveSettings;
+        this.configMapName = pluginContext == null ? null : pluginContext.getConfigMapName();
     }
 
     @Override
@@ -77,14 +82,12 @@ public class OnlineStatsPlugin extends BasePlugin {
                 // that was still in the store.
                 statsService.refreshIndexes();
                 statsService.flushPendingWrites();
-                settingFetcher.fetch(OnlineStatsSettings.GROUP, OnlineStatsSettings.class)
-                    .defaultIfEmpty(OnlineStatsSettings.empty())
-                    .subscribe(settings -> {
-                        statsService
-                            .ensureAdjustment(settings.officialViewsAdjustmentOrDefault());
-                        // Conversations follow the visitor retention window.
-                        chatService.prune(settings.historyRetentionDaysOrDefault());
-                    });
+                OnlineStatsSettings settings = liveSettings.settings(configMapName);
+                statsService.ensureAdjustment(settings.officialViewsAdjustmentOrDefault());
+                // Conversations follow the visitor retention window.
+                chatService.prune(settings.historyRetentionDaysOrDefault());
+                chatService.setGreeting(settings.chatAnnounceText(),
+                    settings.chatAnnounceName());
             } catch (Exception ignored) {
                 // a failed refresh must never kill the scheduler
             }

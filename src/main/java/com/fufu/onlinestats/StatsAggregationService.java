@@ -843,6 +843,10 @@ public class StatsAggregationService {
                 articleIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
+                if (schemeMissing(e)) {
+                    log.debug("Scheme not registered yet, leaving the counters in memory");
+                    return;
+                }
                 lastError = e;
                 // Same rule as the daily record: the counters in memory must not be
                 // dropped because somebody else wrote this article first.
@@ -873,6 +877,24 @@ public class StatsAggregationService {
      * second. The counters live in memory, so a skipped write is only deferred; the
      * periodic flush below makes sure nothing waits for the next visitor.
      */
+    /**
+     * True when the extension type is not registered (yet).
+     *
+     * <p>Halo serves the scheme registry per plugin instance; a request that finishes
+     * while the plugin is shutting down, or one that arrives before the new instance has
+     * registered its types, fails with {@code Scheme not found}. The counters are still
+     * in memory at that point and the next write includes them.</p>
+     */
+    static boolean schemeMissing(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            String message = current.getMessage();
+            if (message != null && message.contains("Scheme not found")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean writeIsTooSoon(String key) {
         long now = System.currentTimeMillis();
         Long last = lastWriteAt.get(key);
@@ -1038,6 +1060,10 @@ public class StatsAggregationService {
                 dailyIndex.put(name, result != null ? result : stat);
                 return;
             } catch (Exception e) {
+                if (schemeMissing(e)) {
+                    log.debug("Scheme not registered yet, leaving the counters in memory");
+                    return;
+                }
                 lastError = e;
                 settleBeforeRetry(attempt);
                 /* The write carries counters accumulated in memory, so giving up loses

@@ -34,6 +34,7 @@ interface ConversationItem {
   lastText: string
   lastAt: number
   replied: boolean
+  answered: boolean
 }
 
 interface Stats {
@@ -80,17 +81,28 @@ const manageTabs = [
 ]
 const chatWindowOpen = ref(false)
 const chatKeyword = ref('')
+/** Which conversations the window shows: all, the ones the visitor answered, or the
+ * ones an administrator wrote in by hand (the automatic greeting does not count). */
+type ChatFilter = 'all' | 'replied' | 'answered'
+const chatFilter = ref<ChatFilter>('all')
 const geoBusy = ref('')
 const filteredConversations = computed(() => {
   const term = chatKeyword.value.trim().toLowerCase()
-  if (!term) {
-    return conversations.value
-  }
-  return conversations.value.filter((item) =>
-    [item.ip, item.location, item.lastText]
+  const mode = chatFilter.value
+  return conversations.value.filter((item) => {
+    if (mode === 'replied' && !item.replied) {
+      return false
+    }
+    if (mode === 'answered' && !item.answered) {
+      return false
+    }
+    if (!term) {
+      return true
+    }
+    return [item.ip, item.location, item.lastText]
       .filter(Boolean)
-      .some((field) => String(field).toLowerCase().includes(term)),
-  )
+      .some((field) => String(field).toLowerCase().includes(term))
+  })
 })
 const conversations = ref<ConversationItem[]>([])
 const chatStats = ref({ conversations: 0, replied: 0, messages: 0 })
@@ -447,6 +459,13 @@ const greetingOnly = computed(() =>
 
 /** Threads the visitor answered, which is what the window reports first. */
 const repliedCount = computed(() => conversations.value.filter((item) => item.replied).length)
+const answeredCount = computed(() => conversations.value.filter((item) => item.answered).length)
+
+const chatFilters = computed<{ value: ChatFilter; label: string; count: number }[]>(() => [
+  { value: 'all', label: '全部', count: conversations.value.length },
+  { value: 'replied', label: '访客回过', count: repliedCount.value },
+  { value: 'answered', label: '管理回过', count: answeredCount.value },
+])
 
 async function loadChatStats() {
   try {
@@ -710,6 +729,20 @@ onUnmounted(() => {
             {{ conversations.length }} 位访客 · {{ repliedCount }} 位回过话
           </span>
           <span class="os-chatwin__stat">{{ chatStats.messages }} 条消息</span>
+          <div class="os-chatwin__seg" role="group" aria-label="会话筛选">
+            <button
+              v-for="option in chatFilters"
+              :key="option.value"
+              type="button"
+              class="os-chatwin__segbtn"
+              :class="{ 'is-active': chatFilter === option.value }"
+              :aria-pressed="chatFilter === option.value"
+              @click="chatFilter = option.value"
+            >
+              {{ option.label }}
+              <span class="os-chatwin__segnum">{{ option.count }}</span>
+            </button>
+          </div>
           <button class="os-chatwin__close" type="button" @click="chatWindowOpen = false">
             关闭
           </button>
@@ -1807,6 +1840,43 @@ onUnmounted(() => {
   &__stat {
     font-size: 0.75rem;
     color: #6b7280;
+  }
+
+  &__seg {
+    display: inline-flex;
+    gap: 0.125rem;
+    padding: 0.125rem;
+    background: #f1f5f9;
+    border-radius: 0.5rem;
+  }
+
+  &__segbtn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    color: #475569;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    border-radius: 0.375rem;
+    transition: background 0.15s ease, color 0.15s ease;
+
+    &.is-active {
+      color: #0f766e;
+      background: #fff;
+      box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+    }
+
+    &:hover:not(.is-active) {
+      background: rgb(255 255 255 / 0.6);
+    }
+  }
+
+  &__segnum {
+    font-variant-numeric: tabular-nums;
+    opacity: 0.7;
   }
 
   &__close {
